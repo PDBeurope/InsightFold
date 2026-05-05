@@ -1,0 +1,28 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+venv/
+
+# Node dependencies
+node_modules/
+
+.ipynb_checkpoints/
+*.csv
+*.json
+!package.json
+!package-lock.json
+
+# Editor/project-local metadata
+.idea/
+.vscode/
+
+# OS and temporary files
+.DS_Store
+*.tmp
