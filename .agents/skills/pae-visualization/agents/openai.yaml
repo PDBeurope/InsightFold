@@ -1,0 +1,4 @@
+interface:
+  display_name: "PAE Visualization"
+  short_description: "Create annotated PAE heatmaps and metric masks."
+  default_prompt: "Create PAE visualizations and explanatory overlays for this notebook."

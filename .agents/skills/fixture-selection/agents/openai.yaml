@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fixture Selection"
+  short_description: "Choose pinned fixtures and expected outputs for notebooks."
+  default_prompt: "Create a fixture manifest for this InsightFold notebook spec."

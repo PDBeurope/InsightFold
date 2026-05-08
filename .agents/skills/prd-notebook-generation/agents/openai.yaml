@@ -1,0 +1,4 @@
+interface:
+  display_name: "PRD Notebook Generation"
+  short_description: "Generate the homodimer diagnostic notebook from its PRD/spec."
+  default_prompt: "Generate the homodimer diagnostic notebook from the PRD and spec."

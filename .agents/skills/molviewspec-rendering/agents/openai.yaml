@@ -1,0 +1,4 @@
+interface:
+  display_name: "MolViewSpec Rendering"
+  short_description: "Build MolViewSpec structural visualization states."
+  default_prompt: "Create MolViewSpec views for this InsightFold notebook."

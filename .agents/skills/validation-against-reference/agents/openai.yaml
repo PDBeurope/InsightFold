@@ -1,0 +1,4 @@
+interface:
+  display_name: "Validation Against Reference"
+  short_description: "Compare computed metrics against reference implementations."
+  default_prompt: "Validate these notebook metrics against the reference implementation."

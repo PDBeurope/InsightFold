@@ -1,0 +1,4 @@
+interface:
+  display_name: "LIS Implementation"
+  short_description: "Compute Local Interaction Score from inter-chain PAE."
+  default_prompt: "Implement or review LIS calculation for this notebook."

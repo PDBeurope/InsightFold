@@ -1,0 +1,4 @@
+interface:
+  display_name: "Homodimer Confidence Scoring"
+  short_description: "Implement AFDB homodimer confidence metrics and contracts."
+  default_prompt: "Implement or review AFDB homodimer confidence scoring for this notebook."

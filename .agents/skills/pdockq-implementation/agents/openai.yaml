@@ -1,0 +1,4 @@
+interface:
+  display_name: "pDockQ Implementation"
+  short_description: "Calculate pDockQ and pDockQ2 interface scores."
+  default_prompt: "Implement or review pDockQ and pDockQ2 calculations for this notebook."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "AFDB API Fetching"
+  short_description: "Fetch AlphaFold Database structure and confidence data."
+  default_prompt: "Fetch and validate AFDB prediction data for this accession."

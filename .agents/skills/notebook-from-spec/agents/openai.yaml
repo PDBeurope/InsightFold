@@ -1,0 +1,4 @@
+interface:
+  display_name: "Notebook From Spec"
+  short_description: "Build notebooks from reviewed spec packs."
+  default_prompt: "Build an InsightFold notebook from this reviewed spec pack."

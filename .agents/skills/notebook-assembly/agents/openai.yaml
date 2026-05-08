@@ -1,0 +1,4 @@
+interface:
+  display_name: "Notebook Assembly"
+  short_description: "Assemble modular sections into a runnable notebook."
+  default_prompt: "Assemble these notebook sections into a reproducible educational notebook."
