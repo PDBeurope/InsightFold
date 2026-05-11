@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="754" height="290" viewBox="0 0 754 290" role="img">
+<style>
+  .title { font: 700 18px Arial, sans-serif; fill: #111827; }
+  .axis-label { font: 12px Arial, sans-serif; fill: #374151; }
+  .row-label { font: 13px Arial, sans-serif; fill: #111827; }
+  .cell-value { font: 700 13px Arial, sans-serif; fill: #111827; }
+  .tick { font: 11px Arial, sans-serif; fill: #6b7280; }
+  .grid { stroke: #e5e7eb; stroke-width: 1; }
+</style>
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="20" y="28" class="title">Score Heatmap: spec_nmr_restraints</text>
+<text x="226.0" y="48" class="axis-label" text-anchor="middle">Correct</text>
+<text x="338.0" y="48" class="axis-label" text-anchor="middle">Complete</text>
+<text x="450.0" y="48" class="axis-label" text-anchor="middle">Specific</text>
+<text x="562.0" y="48" class="axis-label" text-anchor="middle">Coherent</text>
+<text x="674.0" y="48" class="axis-label" text-anchor="middle">Actionable</text>
+<text x="20" y="80" class="row-label">reference</text>
+<rect x="170" y="58" width="108" height="30" fill="#fef08a" rx="4"><title>reference correctness: 3</title></rect>
+<text x="224.0" y="79" class="cell-value" text-anchor="middle">3</text>
+<rect x="282" y="58" width="108" height="30" fill="#bbf7d0" rx="4"><title>reference completeness: 4</title></rect>
+<text x="336.0" y="79" class="cell-value" text-anchor="middle">4</text>
+<rect x="394" y="58" width="108" height="30" fill="#bbf7d0" rx="4"><title>reference specificity: 4</title></rect>
+<text x="448.0" y="79" class="cell-value" text-anchor="middle">4</text>
+<rect x="506" y="58" width="108" height="30" fill="#bbf7d0" rx="4"><title>reference coherence: 4</title></rect>
+<text x="560.0" y="79" class="cell-value" text-anchor="middle">4</text>
+<rect x="618" y="58" width="108" height="30" fill="#bbf7d0" rx="4"><title>reference actionability: 4</title></rect>
+<text x="672.0" y="79" class="cell-value" text-anchor="middle">4</text>
+<text x="20" y="114" class="row-label">deepseek_v4_expert</text>
+<rect x="170" y="92" width="108" height="30" fill="#fef08a" rx="4"><title>deepseek_v4_expert correctness: 3</title></rect>
+<text x="224.0" y="113" class="cell-value" text-anchor="middle">3</text>
+<rect x="282" y="92" width="108" height="30" fill="#fef08a" rx="4"><title>deepseek_v4_expert completeness: 3</title></rect>
+<text x="336.0" y="113" class="cell-value" text-anchor="middle">3</text>
+<rect x="394" y="92" width="108" height="30" fill="#bbf7d0" rx="4"><title>deepseek_v4_expert specificity: 4</title></rect>
+<text x="448.0" y="113" class="cell-value" text-anchor="middle">4</text>
+<rect x="506" y="92" width="108" height="30" fill="#bbf7d0" rx="4"><title>deepseek_v4_expert coherence: 4</title></rect>
+<text x="560.0" y="113" class="cell-value" text-anchor="middle">4</text>
+<rect x="618" y="92" width="108" height="30" fill="#bbf7d0" rx="4"><title>deepseek_v4_expert actionability: 4</title></rect>
+<text x="672.0" y="113" class="cell-value" text-anchor="middle">4</text>
+<text x="20" y="148" class="row-label">deepseek_v4_instant</text>
+<rect x="170" y="126" width="108" height="30" fill="#fef08a" rx="4"><title>deepseek_v4_instant correctness: 3</title></rect>
+<text x="224.0" y="147" class="cell-value" text-anchor="middle">3</text>
+<rect x="282" y="126" width="108" height="30" fill="#bbf7d0" rx="4"><title>deepseek_v4_instant completeness: 4</title></rect>
+<text x="336.0" y="147" class="cell-value" text-anchor="middle">4</text>
+<rect x="394" y="126" width="108" height="30" fill="#bbf7d0" rx="4"><title>deepseek_v4_instant specificity: 4</title></rect>
+<text x="448.0" y="147" class="cell-value" text-anchor="middle">4</text>
+<rect x="506" y="126" width="108" height="30" fill="#bbf7d0" rx="4"><title>deepseek_v4_instant coherence: 4</title></rect>
+<text x="560.0" y="147" class="cell-value" text-anchor="middle">4</text>
+<rect x="618" y="126" width="108" height="30" fill="#fef08a" rx="4"><title>deepseek_v4_instant actionability: 3</title></rect>
+<text x="672.0" y="147" class="cell-value" text-anchor="middle">3</text>
+<text x="20" y="182" class="row-label">gemma4_31b</text>
+<rect x="170" y="160" width="108" height="30" fill="#fef08a" rx="4"><title>gemma4_31b correctness: 3</title></rect>
+<text x="224.0" y="181" class="cell-value" text-anchor="middle">3</text>
+<rect x="282" y="160" width="108" height="30" fill="#fef08a" rx="4"><title>gemma4_31b completeness: 3</title></rect>
+<text x="336.0" y="181" class="cell-value" text-anchor="middle">3</text>
+<rect x="394" y="160" width="108" height="30" fill="#fef08a" rx="4"><title>gemma4_31b specificity: 3</title></rect>
+<text x="448.0" y="181" class="cell-value" text-anchor="middle">3</text>
+<rect x="506" y="160" width="108" height="30" fill="#bbf7d0" rx="4"><title>gemma4_31b coherence: 4</title></rect>
+<text x="560.0" y="181" class="cell-value" text-anchor="middle">4</text>
+<rect x="618" y="160" width="108" height="30" fill="#fef08a" rx="4"><title>gemma4_31b actionability: 3</title></rect>
+<text x="672.0" y="181" class="cell-value" text-anchor="middle">3</text>
+<text x="20" y="216" class="row-label">gemma4_e4b</text>
+<rect x="170" y="194" width="108" height="30" fill="#fef08a" rx="4"><title>gemma4_e4b correctness: 3</title></rect>
+<text x="224.0" y="215" class="cell-value" text-anchor="middle">3</text>
+<rect x="282" y="194" width="108" height="30" fill="#fef08a" rx="4"><title>gemma4_e4b completeness: 3</title></rect>
+<text x="336.0" y="215" class="cell-value" text-anchor="middle">3</text>
+<rect x="394" y="194" width="108" height="30" fill="#fef08a" rx="4"><title>gemma4_e4b specificity: 3</title></rect>
+<text x="448.0" y="215" class="cell-value" text-anchor="middle">3</text>
+<rect x="506" y="194" width="108" height="30" fill="#bbf7d0" rx="4"><title>gemma4_e4b coherence: 4</title></rect>
+<text x="560.0" y="215" class="cell-value" text-anchor="middle">4</text>
+<rect x="618" y="194" width="108" height="30" fill="#fef08a" rx="4"><title>gemma4_e4b actionability: 3</title></rect>
+<text x="672.0" y="215" class="cell-value" text-anchor="middle">3</text>
+</svg>
