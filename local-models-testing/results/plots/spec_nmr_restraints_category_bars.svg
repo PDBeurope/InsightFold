@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="814" height="434" viewBox="0 0 814 434" role="img">
+<style>
+  .title { font: 700 18px Arial, sans-serif; fill: #111827; }
+  .axis-label { font: 12px Arial, sans-serif; fill: #374151; }
+  .row-label { font: 13px Arial, sans-serif; fill: #111827; }
+  .cell-value { font: 700 13px Arial, sans-serif; fill: #111827; }
+  .tick { font: 11px Arial, sans-serif; fill: #6b7280; }
+  .grid { stroke: #e5e7eb; stroke-width: 1; }
+</style>
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="86" y="28" class="title">Category Scores: spec_nmr_restraints</text>
+<line x1="86" y1="260.0" x2="786" y2="260.0" class="grid"/>
+<text x="76" y="264.0" class="tick" text-anchor="end">1</text>
+<line x1="86" y1="208.0" x2="786" y2="208.0" class="grid"/>
+<text x="76" y="212.0" class="tick" text-anchor="end">2</text>
+<line x1="86" y1="156.0" x2="786" y2="156.0" class="grid"/>
+<text x="76" y="160.0" class="tick" text-anchor="end">3</text>
+<line x1="86" y1="104.0" x2="786" y2="104.0" class="grid"/>
+<text x="76" y="108.0" class="tick" text-anchor="end">4</text>
+<line x1="86" y1="52.0" x2="786" y2="52.0" class="grid"/>
+<text x="76" y="56.0" class="tick" text-anchor="end">5</text>
+<line x1="86" y1="52" x2="86" y2="312" stroke="#9ca3af"/>
+<line x1="86" y1="312" x2="786" y2="312" stroke="#9ca3af"/>
+<rect x="99.0" y="156.0" width="19.6" height="156.0" fill="#2563eb" rx="2"><title>reference correctness: 3/5</title></rect>
+<rect x="122.6" y="156.0" width="19.6" height="156.0" fill="#dc2626" rx="2"><title>deepseek_v4_expert correctness: 3/5</title></rect>
+<rect x="146.2" y="156.0" width="19.6" height="156.0" fill="#16a34a" rx="2"><title>deepseek_v4_instant correctness: 3/5</title></rect>
+<rect x="169.8" y="156.0" width="19.6" height="156.0" fill="#9333ea" rx="2"><title>gemma4_31b correctness: 3/5</title></rect>
+<rect x="193.4" y="156.0" width="19.6" height="156.0" fill="#ea580c" rx="2"><title>gemma4_e4b correctness: 3/5</title></rect>
+<text x="156.0" y="334" class="axis-label" text-anchor="middle">Correct</text>
+<rect x="239.0" y="104.0" width="19.6" height="208.0" fill="#2563eb" rx="2"><title>reference completeness: 4/5</title></rect>
+<rect x="262.6" y="156.0" width="19.6" height="156.0" fill="#dc2626" rx="2"><title>deepseek_v4_expert completeness: 3/5</title></rect>
+<rect x="286.2" y="104.0" width="19.6" height="208.0" fill="#16a34a" rx="2"><title>deepseek_v4_instant completeness: 4/5</title></rect>
+<rect x="309.8" y="156.0" width="19.6" height="156.0" fill="#9333ea" rx="2"><title>gemma4_31b completeness: 3/5</title></rect>
+<rect x="333.4" y="156.0" width="19.6" height="156.0" fill="#ea580c" rx="2"><title>gemma4_e4b completeness: 3/5</title></rect>
+<text x="296.0" y="334" class="axis-label" text-anchor="middle">Complete</text>
+<rect x="379.0" y="104.0" width="19.6" height="208.0" fill="#2563eb" rx="2"><title>reference specificity: 4/5</title></rect>
+<rect x="402.6" y="104.0" width="19.6" height="208.0" fill="#dc2626" rx="2"><title>deepseek_v4_expert specificity: 4/5</title></rect>
+<rect x="426.2" y="104.0" width="19.6" height="208.0" fill="#16a34a" rx="2"><title>deepseek_v4_instant specificity: 4/5</title></rect>
+<rect x="449.8" y="156.0" width="19.6" height="156.0" fill="#9333ea" rx="2"><title>gemma4_31b specificity: 3/5</title></rect>
+<rect x="473.4" y="156.0" width="19.6" height="156.0" fill="#ea580c" rx="2"><title>gemma4_e4b specificity: 3/5</title></rect>
+<text x="436.0" y="334" class="axis-label" text-anchor="middle">Specific</text>
+<rect x="519.0" y="104.0" width="19.6" height="208.0" fill="#2563eb" rx="2"><title>reference coherence: 4/5</title></rect>
+<rect x="542.6" y="104.0" width="19.6" height="208.0" fill="#dc2626" rx="2"><title>deepseek_v4_expert coherence: 4/5</title></rect>
+<rect x="566.2" y="104.0" width="19.6" height="208.0" fill="#16a34a" rx="2"><title>deepseek_v4_instant coherence: 4/5</title></rect>
+<rect x="589.8" y="104.0" width="19.6" height="208.0" fill="#9333ea" rx="2"><title>gemma4_31b coherence: 4/5</title></rect>
+<rect x="613.4" y="104.0" width="19.6" height="208.0" fill="#ea580c" rx="2"><title>gemma4_e4b coherence: 4/5</title></rect>
+<text x="576.0" y="334" class="axis-label" text-anchor="middle">Coherent</text>
+<rect x="659.0" y="104.0" width="19.6" height="208.0" fill="#2563eb" rx="2"><title>reference actionability: 4/5</title></rect>
+<rect x="682.6" y="104.0" width="19.6" height="208.0" fill="#dc2626" rx="2"><title>deepseek_v4_expert actionability: 4/5</title></rect>
+<rect x="706.2" y="156.0" width="19.6" height="156.0" fill="#16a34a" rx="2"><title>deepseek_v4_instant actionability: 3/5</title></rect>
+<rect x="729.8" y="156.0" width="19.6" height="156.0" fill="#9333ea" rx="2"><title>gemma4_31b actionability: 3/5</title></rect>
+<rect x="753.4" y="156.0" width="19.6" height="156.0" fill="#ea580c" rx="2"><title>gemma4_e4b actionability: 3/5</title></rect>
+<text x="716.0" y="334" class="axis-label" text-anchor="middle">Actionable</text>
+<rect x="86" y="350" width="12" height="12" fill="#2563eb" rx="2"/>
+<text x="104" y="360" class="axis-label">reference</text>
+<rect x="216" y="350" width="12" height="12" fill="#dc2626" rx="2"/>
+<text x="234" y="360" class="axis-label">deepseek_v4_expert</text>
+<rect x="384" y="350" width="12" height="12" fill="#16a34a" rx="2"/>
+<text x="402" y="360" class="axis-label">deepseek_v4_instant</text>
+<rect x="86" y="374" width="12" height="12" fill="#9333ea" rx="2"/>
+<text x="104" y="384" class="axis-label">gemma4_31b</text>
+<rect x="216" y="374" width="12" height="12" fill="#ea580c" rx="2"/>
+<text x="234" y="384" class="axis-label">gemma4_e4b</text>
+</svg>
