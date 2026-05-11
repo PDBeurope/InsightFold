@@ -1,0 +1,4 @@
+interface:
+  display_name: "Notebook Execution Validation"
+  short_description: "Validate notebook execution, fixtures, runtime, and outputs."
+  default_prompt: "Validate this InsightFold notebook against its spec and fixtures."

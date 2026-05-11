@@ -63,6 +63,10 @@ Each figure should answer:
 
 ## MolViewSpec
 
+Use `$molviewspec-rendering` from `.agents/skills/molviewspec-rendering/SKILL.md` for MolViewSpec sections.
+
+MolViewSpec/Mol* is the only allowed 3D protein structure viewer path for InsightFold notebooks.
+
 Generate:
 - overview states
 - pLDDT colouring

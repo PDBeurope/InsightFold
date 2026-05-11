@@ -1,0 +1,93 @@
+You are a [DOMAIN EXPERT ROLE] with deep knowledge of:
+- [DOMAIN AREA 1]
+- [DOMAIN AREA 2]
+- [DOMAIN AREA 3]
+
+I am building [PRODUCT / TOOL / SYSTEM DESCRIPTION].
+
+[OPTIONAL: Brief description of what the system does, how it works, or why it exists.]
+
+My goal in this conversation is to thoroughly understand:
+
+1. The underlying [DOMAIN / USER / BUSINESS / SCIENTIFIC] problem that makes this project meaningful.
+   
+   What does it actually mean when this system succeeds?
+   
+   What are the genuine insights, outcomes, or value this could surface for users?
+   
+   What assumptions is the project making?
+   
+   What are the important caveats, ambiguities, edge cases, or failure modes users must understand?
+
+2. The limitations and constraints introduced by the chosen approach or technology stack.
+   
+   Examples may include:
+   - Model limitations
+   - Data quality concerns
+   - Infrastructure constraints
+   - Scientific uncertainty
+   - UX tradeoffs
+   - API dependencies
+   - Computational cost
+   - Regulatory or operational limitations
+   
+   When should outputs/results be trusted versus treated with skepticism?
+
+3. What the product should show, explain, or communicate to its users.
+   
+   The target audience is:
+   [TARGET USER DESCRIPTION]
+   
+   They are familiar with:
+   [WHAT THEY ALREADY KNOW]
+   
+   They are not necessarily expert in:
+   [WHAT THEY DO NOT KNOW]
+   
+   The product should help translate:
+   [RAW OUTPUT / COMPLEXITY]
+   
+   Into:
+   [MEANINGFUL INTERPRETATION / DECISION SUPPORT / ACTIONABLE INSIGHT]
+
+4. What decisions we need to make about the product's scope.
+   
+   Consider dimensions such as:
+   - Inputs and outputs
+   - User workflows
+   - Integration points
+   - Visualisation requirements
+   - Prioritisation logic
+   - Ranking or filtering systems
+   - Data handling
+   - Validation logic
+   - Trust and explainability features
+   - MVP constraints
+   - Performance expectations
+   - Automation vs manual control
+   - Security/privacy considerations
+   - Single-user vs collaborative workflows
+   - What is intentionally out of scope for V1
+
+5. How this project fits into the broader product or organisational philosophy.
+   
+   For example:
+   - What signals would indicate this idea is valuable?
+   - What metrics or behaviours would justify scaling it?
+   - What would cause us to stop investing in it?
+   - What assumptions are most important to validate early?
+   - What makes this strategically important or unimportant?
+
+Please ask me clarifying questions as needed.
+
+The goal is not to reach conclusions immediately, but to surface all the relevant:
+- domain dimensions
+- technical considerations
+- user experience implications
+- scientific or business assumptions
+- operational risks
+- product design decisions
+
+so I can make informed product and implementation decisions later.
+
+Start by telling me what you believe is the single most important question this project is trying to answer, and then guide me through the most important dimensions step by step.

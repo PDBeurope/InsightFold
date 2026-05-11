@@ -1,0 +1,1575 @@
+1. The core problem or question
+Central problem
+The project aims to answer:
+
+“How do mutations perturb the structural interaction and energetic constraint network underlying a protein’s shape, and what mechanistic structural consequences may result?”
+
+The system is intended to:
+
+
+analyze protein structures from AlphaFold (AF) and PDBe,
+
+
+detect chemically meaningful interaction networks,
+
+
+estimate interaction/constraint perturbations caused by mutations,
+
+
+and explain how those perturbations may alter local or global structural compatibility.
+
+
+The core output is not merely structural visualization, but:
+
+interpretable mechanistic reasoning grounded in structural chemistry.
+
+
+Why this problem matters
+Structural biologists routinely inspect:
+
+
+AlphaFold models,
+
+
+experimental structures,
+
+
+interaction networks,
+
+
+and mutations,
+
+
+but most workflows remain:
+
+
+manual,
+
+
+fragmented,
+
+
+visualization-heavy,
+
+
+and weakly interpretable.
+
+
+Current tools often:
+
+
+show contacts without explaining significance,
+
+
+provide opaque prediction scores,
+
+
+or overclaim mechanistic certainty.
+
+
+This project addresses the gap between:
+
+
+static structure inspection,
+and
+
+
+mechanistic structural interpretation.
+
+
+
+Who it matters to
+Primary users:
+
+
+structural biologists
+
+
+protein scientists
+
+
+translational researchers
+
+
+mutation-focused experimentalists
+
+
+Users are assumed to understand:
+
+
+protein chemistry
+
+
+folding
+
+
+structural biology
+
+
+Users are not assumed to:
+
+
+code,
+
+
+interpret raw force-field outputs,
+
+
+or manually derive interaction-network reasoning.
+
+
+
+What capability or insight this enables
+The system enables users to:
+
+
+understand why a structure adopts a given shape,
+
+
+identify structurally important residues,
+
+
+analyze mutation-induced interaction perturbations,
+
+
+reason about compatibility/incompatibility with the original fold,
+
+
+and generate mechanistic hypotheses about structural consequences.
+
+
+Key insight:
+
+mutations should be understood as redistributions of structural constraints, not simple residue substitutions.
+
+
+Why this approach is meaningful
+The project occupies a scientifically valuable niche between:
+
+
+structure viewers,
+
+
+mutation predictors,
+
+
+and black-box pathogenicity systems.
+
+
+The product’s differentiator is:
+
+interpretable structural reasoning.
+
+Rather than predicting “truth” (e.g. pathogenicity), the system:
+
+
+explains structural consequences,
+
+
+visualizes interaction-network perturbations,
+
+
+and highlights compatibility shifts in the structural constraint landscape.
+
+
+This makes the system:
+
+
+scientifically defensible,
+
+
+educationally valuable,
+
+
+and mechanistically interpretable.
+
+
+
+2. How the system/product works
+High-level workflow
+The system:
+
+
+retrieves structures from AF and/or PDBe,
+
+
+normalizes and parses structures,
+
+
+computes interaction networks and energetic approximations,
+
+
+models mutation-induced perturbations,
+
+
+compares WT vs mutant interaction topology,
+
+
+generates mechanistic interpretations,
+
+
+ranks structural disruption likelihood.
+
+
+
+Core operational logic
+The system models proteins as:
+
+structural constraint networks.
+
+A protein fold is treated as:
+
+
+a network of interacting residues,
+
+
+stabilized through cooperative energetic compatibility.
+
+
+Mutations are analyzed as:
+
+perturbations to that compatibility network.
+
+The system reasons about:
+
+
+interaction loss,
+
+
+steric incompatibility,
+
+
+packing disruption,
+
+
+centrality loss,
+
+
+and altered constraint density.
+
+
+
+Inputs
+Primary inputs
+
+
+AlphaFold structures
+
+
+PDBe experimental structures
+
+
+Optional inputs
+
+
+mutation(s)
+
+
+chain selection
+
+
+residue selection
+
+
+
+Structural provenance policy
+Decision:
+
+
+support AF and PDBe equally as input sources,
+
+
+but treat PDBe structures as higher-confidence evidence when available.
+
+
+Default behavior:
+
+
+prefer PDBe if high-quality experimental structure exists,
+
+
+otherwise use AF.
+
+
+Manual override should remain available.
+
+Structural interaction layer
+The system detects:
+
+
+hydrogen bonds
+
+
+salt bridges
+
+
+hydrophobic contacts
+
+
+aromatic interactions
+
+
+disulfides
+
+
+steric clashes
+
+
+local packing contacts
+
+
+These interactions form:
+
+residue-level interaction graphs.
+
+
+Energetic reasoning layer
+The system uses:
+
+
+heuristic/empirical energetic estimates,
+NOT:
+
+
+full thermodynamic free-energy calculations.
+
+
+Important implementation decision:
+
+
+avoid claiming exact physical energies or true ΔΔG.
+
+
+The system estimates:
+
+
+interaction favorability,
+
+
+compatibility shifts,
+
+
+local destabilization signals.
+
+
+The product should avoid:
+
+
+total stability scores,
+
+
+deterministic energetic claims.
+
+
+
+Network analysis layer
+The system models:
+
+
+residues as graph nodes,
+
+
+interactions as edges.
+
+
+Edge weights may incorporate:
+
+
+interaction type,
+
+
+interaction confidence,
+
+
+approximate energetic importance.
+
+
+Network-derived signals include:
+
+
+interaction density
+
+
+centrality
+
+
+network fragmentation
+
+
+local connectivity loss
+
+
+constraint redundancy
+
+
+The network model is intended to represent:
+
+structural constraint architecture.
+
+
+Mutation analysis workflow
+Mutation analysis focuses on:
+
+
+local compatibility disruption,
+
+
+not exact structural prediction.
+
+
+Mutation workflow:
+
+
+apply residue substitution,
+
+
+recompute local interaction environment,
+
+
+estimate perturbation to interaction network,
+
+
+identify constraint incompatibilities,
+
+
+infer likely structural adaptation pressures.
+
+
+
+Mutation consequence categories
+The system explicitly supports interpretation of:
+Secondary structure disruption
+Strongest and most defensible category.
+Examples:
+
+
+proline insertion,
+
+
+glycine flexibility,
+
+
+β-sheet incompatibility,
+
+
+helix packing disruption.
+
+
+
+Interface disruption
+Moderately strong.
+Examples:
+
+
+loss of interface packing,
+
+
+disrupted electrostatics,
+
+
+weakened buried contacts.
+
+
+
+Flexibility changes
+Interpret cautiously.
+The system does NOT directly predict dynamics.
+Instead it infers:
+
+
+reduced packing,
+
+
+weaker constraints,
+
+
+increased local adaptability signals.
+
+
+
+Structural destabilization signals
+Preferred terminology over “unfolding risk.”
+The system identifies:
+
+
+destabilizing structural features,
+NOT:
+
+
+actual folding thermodynamics.
+
+
+
+Core conceptual framework
+The system operates through:
+Compatibility analysis
+Does the mutation fit the original structural environment?
+
+Constraint redistribution
+How does the mutation alter stabilizing interactions?
+
+Interaction-network perturbation
+How does the mutation affect local cooperative stabilization?
+
+Structural adaptation pressure
+What regions may require conformational accommodation?
+
+Output model
+Outputs are layered into:
+Observation
+Directly computed facts.
+Examples:
+
+
+lost hydrogen bond,
+
+
+cavity introduced,
+
+
+clash detected.
+
+
+
+Interpretation
+Mechanistic reasoning.
+Examples:
+
+
+disrupted aromatic packing,
+
+
+weakened hydrophobic core.
+
+
+
+Hypothesis
+Higher-level speculative consequence.
+Examples:
+
+
+local flexibility increase possible,
+
+
+local destabilization plausible.
+
+
+
+Severity ranking
+Decision:
+
+
+rank structural disruption likelihood,
+NOT:
+
+
+pathogenicity or disease severity.
+
+
+Severity derives from:
+
+
+structural interactions
+
+
+energetic estimates
+
+
+network centrality
+
+
+NOT:
+
+
+evolutionary conservation
+
+
+clinical databases
+
+
+genomics evidence
+
+
+
+Key assumptions
+The system assumes:
+
+
+static structures are informative,
+
+
+local interactions approximate stabilizing constraints,
+
+
+interaction-network perturbation correlates with structural sensitivity.
+
+
+
+Known weaknesses
+The system does not model:
+
+
+full thermodynamics,
+
+
+ensemble dynamics,
+
+
+entropy,
+
+
+solvent explicitly,
+
+
+kinetics,
+
+
+allostery,
+
+
+folding pathways,
+
+
+true conformational landscapes.
+
+
+
+3. Constraints, caveats, and reliability considerations
+Structural biology limitations
+Static structures are not full biological reality
+Why it matters:
+Proteins are dynamic ensembles, not rigid objects.
+Risk:
+Users may overinterpret static interactions as deterministic.
+Communication requirement:
+The UI should explicitly communicate:
+
+
+“structural hypothesis”
+
+
+“interaction compatibility”
+
+
+“possible structural adaptation”
+instead of deterministic claims.
+
+
+Mitigation:
+Use layered confidence and inference categories.
+
+AlphaFold-specific limitations
+AF confidence does not equal biological certainty
+AF is strong for:
+
+
+local geometry,
+
+
+globular folds.
+
+
+AF is weaker for:
+
+
+interfaces,
+
+
+disorder,
+
+
+conformational heterogeneity,
+
+
+ligand-induced states,
+
+
+alternative assemblies.
+
+
+Risk:
+False mechanistic narratives from uncertain coordinates.
+Mitigation:
+
+
+propagate pLDDT into interpretation confidence,
+
+
+downweight low-confidence regions,
+
+
+visually mark uncertain interactions.
+
+
+
+Experimental structure limitations
+PDBe structures are not absolute truth.
+Potential issues:
+
+
+crystal packing artifacts,
+
+
+missing residues,
+
+
+low-resolution sidechains,
+
+
+engineered constructs,
+
+
+incomplete assemblies.
+
+
+Communication:
+Experimental provenance should improve confidence but not imply certainty.
+
+Energetic limitations
+Energies are heuristic
+The system does not compute:
+
+
+rigorous free energies,
+
+
+validated ΔΔG values,
+
+
+molecular dynamics ensembles.
+
+
+Risk:
+False precision.
+Mitigation:
+
+
+avoid exact energetic claims,
+
+
+prefer qualitative destabilization reasoning,
+
+
+avoid authoritative numeric outputs.
+
+
+
+Network model limitations
+Graph metrics depend entirely on:
+
+
+interaction definitions,
+
+
+weighting assumptions,
+
+
+geometric thresholds.
+
+
+Risk:
+Artificially convincing but biologically meaningless centrality rankings.
+Mitigation:
+
+
+ensure interpretability,
+
+
+expose interaction definitions,
+
+
+avoid overclaiming network significance.
+
+
+
+Mutation interpretation limitations
+The system cannot reliably predict:
+
+
+exact mutant conformations,
+
+
+actual unfolding,
+
+
+true flexibility changes,
+
+
+allosteric propagation,
+
+
+biological pathogenicity.
+
+
+Communication:
+Use language such as:
+
+
+“consistent with”
+
+
+“may require”
+
+
+“suggests”
+
+
+“possible destabilization”
+
+
+Avoid:
+
+
+“causes”
+
+
+“abolishes”
+
+
+“guarantees”
+
+
+
+Missing biological context
+V1 excludes:
+
+
+ligands
+
+
+cofactors
+
+
+PTMs
+
+
+nucleic acids
+
+
+membrane energetics
+
+
+Risk:
+Incorrect mechanistic interpretation in ligand- or environment-dependent proteins.
+Mitigation:
+Warn users when context may be missing.
+
+Structural normalization challenges
+Implementation risks:
+
+
+residue numbering mismatches,
+
+
+chain naming inconsistencies,
+
+
+alternate conformations,
+
+
+missing loops,
+
+
+biological assembly ambiguity.
+
+
+Mitigation:
+Implement robust structure normalization layer.
+
+Applicability limits
+The system should be cautious for:
+
+
+disordered proteins,
+
+
+membrane proteins,
+
+
+multimer uncertainty,
+
+
+metal-dependent proteins,
+
+
+flexible loops,
+
+
+low-confidence AF regions.
+
+
+
+Trust architecture
+The system should distinguish:
+TypeMeaningStructural confidencetrust in coordinatesInteraction confidencetrust in interaction geometryMechanistic confidencetrust in interpretation
+This distinction is foundational.
+
+4. Scope decisions
+Input sources
+Decision:
+Support both AF and PDBe structures.
+Reason:
+Both are valuable structural hypotheses.
+Tradeoff:
+Need provenance-aware confidence handling.
+
+Experimental preference
+Decision:
+Prefer PDBe structures when good experimental data exists.
+Reason:
+Higher structural reliability.
+Tradeoff:
+Experimental structures may be incomplete.
+
+Product positioning
+Decision:
+Build an interpretable structural reasoning system.
+NOT:
+
+
+pathogenicity predictor,
+
+
+clinical classifier,
+
+
+full stability engine.
+
+
+Reason:
+Maintains scientific defensibility and interpretability.
+
+Evidence model
+Decision:
+Use only:
+
+
+structural interactions,
+
+
+energetic estimates,
+
+
+network centrality.
+
+
+Do NOT include:
+
+
+conservation,
+
+
+genomics,
+
+
+clinical evidence,
+
+
+evolutionary scores.
+
+
+Reason:
+Avoid mixing incompatible evidence modalities.
+Tradeoff:
+Reduced predictive breadth.
+
+Interaction granularity
+Decision:
+Operate primarily at:
+
+
+residue level
+
+
+interaction-network level.
+
+
+Reason:
+Best balance between interpretability and detail.
+
+Mutation modeling
+Decision:
+Focus on:
+
+
+compatibility perturbation,
+
+
+interaction redistribution,
+
+
+local structural adaptation pressure.
+
+
+NOT:
+
+
+exact mutant structure prediction.
+
+
+Reason:
+Scientifically safer and more explainable.
+
+Visualization strategy
+Decision:
+Prioritize:
+
+
+interaction perturbation maps,
+
+
+network changes,
+
+
+compatibility shifts.
+
+
+NOT:
+
+
+authoritative mutant structure simulations.
+
+
+Reason:
+Avoid false geometric certainty.
+
+Severity scoring
+Decision:
+Rank:
+
+
+structural disruption likelihood.
+
+
+NOT:
+
+
+disease severity,
+
+
+pathogenicity,
+
+
+clinical outcome.
+
+
+Reason:
+System lacks biological-context evidence.
+
+Supported mechanistic categories
+Decision:
+Support:
+
+
+secondary structure disruption,
+
+
+interface disruption,
+
+
+flexibility-related constraint changes,
+
+
+structural destabilization signals.
+
+
+Reason:
+Scientifically interpretable from static structures.
+
+Confidence handling
+Decision:
+Confidence must propagate from:
+
+
+structure source,
+
+
+local confidence,
+
+
+interaction robustness.
+
+
+Reason:
+Prevent overinterpretation.
+
+V1 exclusions
+Explicitly out of scope:
+
+
+MD simulations,
+
+
+folding free-energy prediction,
+
+
+ligand energetics,
+
+
+allostery,
+
+
+membrane energetics,
+
+
+ensemble thermodynamics,
+
+
+exact conformational prediction,
+
+
+clinical pathogenicity prediction.
+
+
+Reason:
+Too speculative and computationally complex for defensible MVP.
+
+5. User journey / narrative flow
+Step 1 — Load structure
+User:
+
+
+selects AF or PDBe structure.
+
+
+System:
+
+
+retrieves structure,
+
+
+normalizes chains/residues,
+
+
+annotates provenance/confidence.
+
+
+User sees:
+
+
+structure visualization,
+
+
+confidence indicators,
+
+
+provenance metadata.
+
+
+User learns:
+
+
+structural quality and confidence.
+
+
+
+Step 2 — Interaction analysis
+System computes:
+
+
+hydrogen bonds,
+
+
+packing contacts,
+
+
+aromatic clusters,
+
+
+salt bridges,
+
+
+interaction network topology.
+
+
+User sees:
+
+
+interaction overlays,
+
+
+residue-centric interaction summaries,
+
+
+network connectivity.
+
+
+User learns:
+
+
+what stabilizes the structure,
+
+
+which residues are structurally important.
+
+
+
+Step 3 — Residue inspection
+User selects residue.
+System displays:
+
+
+local interaction environment,
+
+
+energetic compatibility context,
+
+
+network role,
+
+
+burial/packing information.
+
+
+User learns:
+
+
+why the residue matters structurally.
+
+
+
+Step 4 — Mutation introduction
+User specifies mutation.
+System:
+
+
+applies substitution,
+
+
+recomputes local interactions,
+
+
+recalculates compatibility and network perturbation.
+
+
+
+Step 5 — WT vs mutant comparison
+User sees:
+
+
+lost interactions,
+
+
+gained clashes,
+
+
+altered packing,
+
+
+centrality shifts,
+
+
+compatibility perturbation maps.
+
+
+User learns:
+
+
+how the mutation perturbs structural constraints.
+
+
+
+Step 6 — Mechanistic interpretation
+System generates:
+
+
+mechanistic explanations,
+
+
+structural adaptation hypotheses,
+
+
+destabilization signals.
+
+
+Interpretation examples:
+
+
+“mutation introduces steric pressure”
+
+
+“aromatic packing network weakened”
+
+
+“local helix compatibility reduced”
+
+
+
+Step 7 — Severity assessment
+System provides:
+
+
+low/moderate/high structural disruption likelihood.
+
+
+Important:
+Severity remains:
+
+
+structural,
+
+
+mechanistic,
+
+
+non-clinical.
+
+
+User learns:
+
+
+how concerning the mutation may be structurally.
+
+
+
+Step 8 — Confidence interpretation
+System communicates:
+
+
+confidence levels,
+
+
+structural uncertainty,
+
+
+inference depth,
+
+
+speculative vs observed conclusions.
+
+
+User learns:
+
+
+how much to trust each conclusion.
+
+
+
+6. Open questions and deferred decisions
+Exact energetic model
+Unresolved:
+Which energetic framework should power interaction scoring?
+Deferred because:
+Need validation and implementation evaluation.
+Possible options:
+
+
+geometric heuristics
+
+
+statistical potentials
+
+
+empirical force fields
+
+
+
+Network weighting strategy
+Unresolved:
+How should interaction types contribute to edge weighting?
+Need:
+
+
+empirical tuning,
+
+
+validation datasets,
+
+
+expert feedback.
+
+
+
+Mutant structure generation depth
+Unresolved:
+Should mutants use:
+
+
+sidechain replacement only,
+
+
+local minimization,
+
+
+repacking engines?
+
+
+Deferred because:
+Computational/performance tradeoffs unclear.
+
+Quantitative scoring calibration
+Unresolved:
+How should structural disruption likelihood thresholds be calibrated?
+Need:
+
+
+benchmarking against mutation datasets.
+
+
+
+Robustness across multiple structures
+Unresolved:
+Should the system compare multiple structural sources/models automatically?
+Deferred because:
+Potentially large UX and infrastructure expansion.
+
+Biological assembly handling
+Unresolved:
+How aggressively should assemblies be reconstructed automatically?
+Need:
+
+
+structural pipeline evaluation.
+
+
+
+Interaction persistence/robustness scoring
+Unresolved:
+Should interaction conservation across models be computed?
+Reason deferred:
+Requires multi-structure orchestration.
+
+Natural-language explanation depth
+Unresolved:
+How detailed/generated should mechanistic narratives become?
+Need:
+
+
+UX validation,
+
+
+hallucination risk assessment.
+
+
+
+Performance constraints
+Unresolved:
+What level of precomputation vs live computation is acceptable?
+Need:
+
+
+infrastructure benchmarking.
+
+
+
+7. Success criteria / signal for graduation
+Success signals
+The project is successful if users:
+
+
+generate mechanistic mutation hypotheses faster,
+
+
+rely on interaction explanations during analysis,
+
+
+use outputs for experimental planning,
+
+
+export figures/explanations for papers or presentations,
+
+
+reduce manual PyMOL inspection effort.
+
+
+Strong signals:
+
+
+repeat use by structural biologists,
+
+
+use in mutagenesis prioritization,
+
+
+educational adoption,
+
+
+high engagement with interaction reasoning views.
+
+
+
+Scientific validation signals
+Success indicators:
+
+
+mechanistic interpretations correlate with known structural effects,
+
+
+interaction perturbations align with experimental mutation outcomes,
+
+
+expert users find explanations chemically reasonable.
+
+
+
+Product scalability signals
+Scale investment justified if:
+
+
+users trust explanation layers,
+
+
+interaction-network views prove uniquely useful,
+
+
+mutation reasoning differentiates product from standard viewers.
+
+
+
+Assumptions requiring early validation
+Most important assumptions:
+
+
+Users value mechanistic explanation more than raw prediction.
+
+
+Interaction-network perturbations correlate with structural sensitivity.
+
+
+Users trust layered confidence explanations.
+
+
+Constraint-network reasoning is interpretable and actionable.
+
+
+
+Failure signals
+The idea should be reconsidered if:
+
+
+users overtrust speculative outputs,
+
+
+explanations feel decorative rather than actionable,
+
+
+network scores lack biological meaning,
+
+
+mutation interpretations contradict established structural reasoning,
+
+
+interaction visualizations become cognitively overwhelming,
+
+
+users only use the system as a structure viewer.
+
+
+
+Graduation criteria for broader operationalization
+The project is ready for broader productionization if:
+
+
+interaction reasoning proves reproducibly useful,
+
+
+confidence handling prevents major overinterpretation,
+
+
+structural interpretations remain scientifically defensible,
+
+
+mutation severity rankings correlate meaningfully with known destabilization trends,
+
+
+expert users consistently understand and trust the explanation hierarchy.

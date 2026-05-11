@@ -36,7 +36,9 @@ Key project areas:
 
 ```text
 .agents/skills/
-  convert-to-prd/
+  idea-scoping-interview/
+  scoping-decision-capture/
+  concept-to-prd/
   prd-to-notebook-spec/
   notebook-spec-review/
   fixture-selection/
@@ -79,7 +81,9 @@ agent-skills/
 The current implemented chain is:
 
 ```text
-convert-to-prd
+idea-scoping-interview
+  -> scoping-decision-capture
+  -> concept-to-prd
   -> prd-to-notebook-spec
   -> spec-reviewer
   -> fixture-curator
@@ -92,7 +96,9 @@ The corresponding skills are:
 
 | Stage | Skill | Purpose |
 |---|---|---|
-| PRD creation | `.agents/skills/convert-to-prd/SKILL.md` | Convert a rough idea into a consistent PRD |
+| Concept discovery | `.agents/skills/idea-scoping-interview/SKILL.md` | Interview and scope a rough notebook idea |
+| Decision capture | `.agents/skills/scoping-decision-capture/SKILL.md` | Summarize decisions, tradeoffs, and open questions |
+| PRD creation | `.agents/skills/concept-to-prd/SKILL.md` | Convert a scoped concept into a true PRD |
 | Notebook spec | `.agents/skills/prd-to-notebook-spec/SKILL.md` | Convert the PRD into an implementation-ready notebook spec pack |
 | Spec review | `.agents/skills/notebook-spec-review/SKILL.md` | Review the spec before implementation starts |
 | Fixture selection | `.agents/skills/fixture-selection/SKILL.md` | Choose pinned examples, edge cases, expected outputs, and provenance |
@@ -111,6 +117,77 @@ The corresponding agent roles are:
 | Notebook validator | `.agents/agents/lifecycle/notebook-validator.md` | Runs mechanical validation and reports evidence |
 | Notebook reviewer | `.agents/agents/lifecycle/notebook-reviewer.md` | Reviews whether a notebook is ready to share, beta, graduate, or archive |
 
+## Recommended Way Of Working
+
+Use one lead thread first, then parallel subagents only after the core question is stable.
+
+Mental model:
+
+- `skill` = reusable method
+- `agent` = role lens, priorities, and guardrails
+- `spawned subagent` = a separate worker that can use both
+
+Recommended sequence in a new conversation:
+
+1. Start with one lead role in a single thread.
+   Use `.agents/agents/advisory/scientific-product-manager.md` with `$idea-scoping-interview`.
+   Goal: define the user, the biological question, the expected evidence, and the rough notebook outcome.
+
+2. Do not parallelize yet if the core sentence is still unclear.
+   The idea should be stable enough to say:
+   `this notebook is for X user to answer Y question using Z evidence`
+
+3. Once that sentence is stable, spawn 3 to 5 advisory subagents in parallel.
+   Good default panel:
+   - `scientific-product-manager`
+   - `computational-structural-biologist`
+   - `bioinformatics-data-engineer`
+   - `evaluation-benchmarking-specialist`
+   - optional domain specialist such as `enzymologist`, `wet-lab-liaison`, `protein-biochemist`, or `molecular-visualization-specialist`
+
+4. Give every subagent the same idea statement, but a different role.
+   Each subagent should return:
+   - key opportunities
+   - highest-risk assumptions
+   - blocking questions
+   - concrete recommendations
+   - whether the idea is ready for `$scoping-decision-capture`
+
+5. Synthesize the panel with `$scoping-decision-capture`.
+   This is the bridge from exploratory discussion to a structured concept record.
+
+6. Only then use `$concept-to-prd`.
+   The PRD should stay a true PRD. Do not push notebook section order, cell plans, traceability tables, or fixture manifests into the PRD.
+
+7. Use `$prd-to-notebook-spec` after the PRD is approved.
+   This skill owns the implementation-ready spec pack.
+
+8. Use lifecycle agents after the spec exists.
+   The normal order is:
+   - `spec-reviewer`
+   - `fixture-curator`
+   - `notebook-builder`
+   - `notebook-validator`
+   - `notebook-reviewer`
+
+When to stay in one thread:
+
+- very early ideation
+- clarifying the user and problem
+- deciding whether an idea is worth pursuing at all
+
+When to use spawned subagents:
+
+- once the idea has enough shape for role-specific critique
+- when you want parallel expert views
+- when you want role separation instead of one blended answer
+
+When not to use too many subagents:
+
+- if the idea is still vague
+- if multiple roles would ask the same basic questions
+- if you do not yet know which biological or technical domain matters most
+
 ## How To Use The Skills From Start To Finish
 
 Use the lifecycle as a sequence of gates. Do not jump straight from idea to notebook unless the work is intentionally exploratory.
@@ -123,38 +200,115 @@ Write a short idea in plain language:
 Idea: Build a notebook that helps users inspect whether AFDB structure confidence changes around clinically interesting variant positions.
 ```
 
-Current status: this stage still needs dedicated skills.
+Recommended first prompt:
 
-Placeholder skills to develop:
+```text
+Use $idea-scoping-interview.
 
-- `idea-capture`
-- `idea-quality-check`
-- `idea-to-triage-brief`
-- `evidence-scan`
-- `risk-and-assumption-log`
+Act as .agents/agents/advisory/scientific-product-manager.md.
 
-Until those exist, capture:
+I want to explore a new InsightFold notebook idea:
+<idea>
 
-- problem
+Do not write a PRD yet.
+Interview me until the user, the biological question, the evidence, and the rough notebook outcome are clear.
+```
+
+Expected outcome:
+
+- stable problem statement
 - target user
-- biological object
 - expected notebook output
-- why this belongs in InsightFold
-- obvious risks or unknowns
+- obvious risks and unknowns
+- judgment about whether parallel advisory review should start
 
-### 2. Convert The Idea To A PRD
+### 2. Run Parallel Advisory Review
+
+After the core question is stable, spawn advisory subagents in parallel.
+
+Recommended default panel:
+
+- `.agents/agents/advisory/scientific-product-manager.md`
+- `.agents/agents/advisory/computational-structural-biologist.md`
+- `.agents/agents/advisory/bioinformatics-data-engineer.md`
+- `.agents/agents/advisory/evaluation-benchmarking-specialist.md`
+- optional: `.agents/agents/advisory/molecular-visualization-specialist.md` when 3D structure views matter
+
+Recommended prompt:
+
+```text
+Spawn parallel subagents for advisory review.
+
+Shared idea statement:
+<stable idea statement>
+
+Subagent 1:
+Act as .agents/agents/advisory/scientific-product-manager.md and use $idea-scoping-interview.
+Focus on scope, user value, PRD readiness, and lifecycle fit.
+
+Subagent 2:
+Act as .agents/agents/advisory/computational-structural-biologist.md.
+Focus on biological assumptions, interpretation risk, and overclaims.
+
+Subagent 3:
+Act as .agents/agents/advisory/bioinformatics-data-engineer.md.
+Focus on APIs, identifiers, provenance, fixtures, and reproducibility.
+
+Subagent 4:
+Act as .agents/agents/advisory/evaluation-benchmarking-specialist.md.
+Focus on validation, expected outputs, fixture quality, and failure cases.
+
+Have each subagent return:
+- key opportunities
+- highest-risk assumptions
+- blocking questions
+- concrete recommendations
+- whether this is ready for $scoping-decision-capture
+```
+
+Expected outcome:
+
+- role-specific critique
+- surfaced blockers
+- better-defined scope boundaries
+- clear recommendation on whether to proceed
+
+### 3. Capture The Decisions
 
 Use:
 
 ```text
-.agents/skills/convert-to-prd/SKILL.md
+.agents/skills/scoping-decision-capture/SKILL.md
+```
+
+Ask Codex:
+
+```text
+Use $scoping-decision-capture to synthesize the ideation discussion and advisory-panel outputs into a structured decision capture.
+Do not write the PRD yet.
+```
+
+Expected output:
+
+- core problem statement
+- scope decisions
+- user journey summary
+- open questions
+- success and stop signals
+
+### 4. Convert The Concept To A PRD
+
+Use:
+
+```text
+.agents/skills/concept-to-prd/SKILL.md
 ```
 
 Ask Codex something like:
 
 ```text
-Use $convert-to-prd to turn this idea into an InsightFold PRD:
-<idea>
+Use $concept-to-prd to turn this scoped concept into an InsightFold PRD:
+<decision capture or approved scoped concept>
 ```
 
 Expected output:
@@ -165,7 +319,7 @@ prd/<feature>.md
 
 The PRD should define the user problem, target audience, scope, non-goals, success criteria, assumptions, risks, and expected notebook artifact.
 
-### 3. Convert The PRD To A Notebook Spec Pack
+### 5. Convert The PRD To A Notebook Spec Pack
 
 Use:
 
@@ -183,8 +337,12 @@ Expected output:
 
 ```text
 specs/<feature>/
+  spec-pack-overview.md
   requirements.md
+  notebook-ux-contract.md
   notebook-design.md
+  cell-blueprint.md
+  traceability-matrix.md
   tasks.md
   validation.md
   docs-plan.md
@@ -194,7 +352,7 @@ specs/<feature>/
 
 For very small prototypes, a single consolidated spec is acceptable if it contains equivalent sections.
 
-### 4. Review The Spec Before Building
+### 6. Review The Spec Before Building
 
 Use:
 
@@ -222,7 +380,7 @@ The review should decide whether implementation can start. It should flag:
 
 Do not build the notebook until blocking spec review findings are resolved.
 
-### 5. Select Fixtures
+### 7. Select Fixtures
 
 Use:
 
@@ -254,7 +412,7 @@ Good fixture manifests include:
 - tolerances
 - validation checks
 
-### 6. Build The Notebook From The Spec
+### 8. Build The Notebook From The Spec
 
 Use:
 
@@ -286,7 +444,7 @@ The notebook should:
 - include interpretation and limitations
 - avoid hidden local paths and hidden state
 
-### 7. Validate Notebook Execution
+### 9. Validate Notebook Execution
 
 Use:
 
@@ -321,7 +479,7 @@ Validation should check:
 
 Execution validation only proves the notebook runs and matches its mechanical checks. It does not prove the notebook is scientifically ready.
 
-### 8. Review The Notebook As A Scientific Artifact
+### 10. Review The Notebook As A Scientific Artifact
 
 Use:
 
@@ -356,7 +514,7 @@ The review should assess:
 
 Use a human/domain review gate when interpretation, thresholds, clinical/RUO framing, or AFDB/PDBe publication risk requires judgment.
 
-### 9. Move To Instrumented Beta
+### 11. Move To Instrumented Beta
 
 Current status: placeholder stage.
 
@@ -383,7 +541,7 @@ The beta stage should answer:
 - what they preferred over existing workflows
 - what must change before graduation
 
-### 10. Graduation Review
+### 12. Graduation Review
 
 Current status: placeholder stage.
 
@@ -411,24 +569,62 @@ Possible outcomes:
 
 ## Recommended Prompts
 
+### Full Ideation
+
+```text
+Use $idea-scoping-interview.
+
+Act as .agents/agents/advisory/scientific-product-manager.md.
+
+I want to explore a new InsightFold notebook idea:
+<idea>
+
+Do not write a PRD yet.
+Interview me until the user, the question, the evidence, and the rough notebook outcome are clear.
+```
+
+### Parallel Advisory Review
+
+```text
+Spawn parallel subagents for advisory review of this stable idea:
+<stable idea statement>
+
+Use:
+- .agents/agents/advisory/scientific-product-manager.md
+- .agents/agents/advisory/computational-structural-biologist.md
+- .agents/agents/advisory/bioinformatics-data-engineer.md
+- .agents/agents/advisory/evaluation-benchmarking-specialist.md
+
+Have each subagent return:
+- key opportunities
+- highest-risk assumptions
+- blocking questions
+- concrete recommendations
+- whether this is ready for $scoping-decision-capture
+```
+
+### Ideation To PRD
+
+```text
+Use $scoping-decision-capture to synthesize the ideation discussion and advisory-panel outputs.
+Then use $concept-to-prd only if the concept is ready.
+```
+
 ### Full Lifecycle
 
 ```text
 Take this idea through the InsightFold lifecycle.
-Start with $convert-to-prd.
-Then use $prd-to-notebook-spec.
-After that, use the lifecycle agents in .agents/agents/lifecycle/ in order.
-Stop at each gate if there are blocking findings.
+
+1. Use $idea-scoping-interview in one lead thread first.
+2. When the idea is stable, spawn parallel advisory subagents.
+3. Use $scoping-decision-capture to synthesize the discussion.
+4. Use $concept-to-prd only if the concept is ready.
+5. Use $prd-to-notebook-spec to build the spec pack.
+6. Then use the lifecycle agents in order.
+7. Stop at each gate if there are blocking findings.
 
 Idea:
 <idea>
-```
-
-### From Existing PRD
-
-```text
-Use $prd-to-notebook-spec to convert prd/<feature>.md into specs/<feature>/.
-Then act as .agents/agents/lifecycle/spec-reviewer.md and review the spec before implementation.
 ```
 
 ### From Existing Spec
@@ -454,7 +650,9 @@ Act as .agents/agents/lifecycle/notebook-reviewer.md and use $notebook-review to
 
 Implemented lifecycle skills:
 
-- `convert-to-prd`
+- `idea-scoping-interview`
+- `scoping-decision-capture`
+- `concept-to-prd`
 - `prd-to-notebook-spec`
 - `notebook-spec-review`
 - `fixture-selection`

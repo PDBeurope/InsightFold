@@ -13,6 +13,8 @@ Use this skill when the user asks to build, scaffold, or update a notebook from:
 
 - `requirements.md`
 - `notebook-design.md`
+- `cell-blueprint.md`
+- `traceability-matrix.md`
 - `tasks.md`
 - `fixture-manifest.md`
 - `data-contracts.md`
@@ -41,6 +43,9 @@ Before editing notebooks, check:
 
 - spec review verdict is `pass` or `pass-with-assumptions`
 - blocking questions are resolved
+- notebook UX contract exists when the notebook is user-facing
+- cell blueprint exists for user-facing or multi-section notebooks
+- traceability matrix exists for implementation-ready spec packs
 - fixture manifest exists
 - data contracts exist
 - validation plan exists
@@ -55,7 +60,9 @@ Create or confirm:
 - target runtime
 - dependency list
 - section order
+- first runnable user input cell
 - cell purposes
+- cell-by-cell validation hooks
 - variables produced and consumed
 - outputs expected from fixtures
 - optional sections and fallbacks
@@ -71,6 +78,7 @@ For each section:
 3. Produce named outputs expected by downstream sections.
 4. Add lightweight checks or assertions where the spec requires them.
 5. Keep visualization cells self-contained and labelled.
+6. Use `$molviewspec-rendering` for any 3D protein structure viewer section.
 
 Prefer this section pattern:
 
@@ -93,7 +101,7 @@ Never silently assume a field exists if the spec says it is optional.
 
 ### 5. Integrate Fixtures
 
-Use the happy-path fixture as the default notebook input unless the spec says otherwise.
+Use the happy-path fixture as the default example input only if the spec says the notebook should default to it. Otherwise, keep fixtures as validation/examples and leave the user-input path primary.
 
 Add fixture-aware checks:
 

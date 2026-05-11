@@ -63,6 +63,8 @@ Each figure should answer:
 
 ## MolViewSpec
 
+Use `skills/molviewspec-rendering/SKILL.md` for MolViewSpec sections.
+
 Generate:
 - overview states
 - pLDDT colouring

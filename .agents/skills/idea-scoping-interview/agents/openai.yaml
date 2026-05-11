@@ -1,0 +1,5 @@
+interface:
+  display_name: "Idea Scoping Interview"
+  short_description: "Guide early InsightFold concept discovery."
+  default_prompt: "Use $idea-scoping-interview to interview me about this InsightFold notebook idea."
+

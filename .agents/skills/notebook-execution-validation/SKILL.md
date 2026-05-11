@@ -30,11 +30,13 @@ Collect:
 
 - notebook path
 - source spec pack
+- notebook UX contract, if present
 - fixture manifest
 - validation plan
 - target runtime
 - dependency policy
 - expected outputs/tolerances
+- cell blueprint and traceability matrix when present
 
 If any are missing, record a validation limitation.
 
@@ -43,6 +45,7 @@ If any are missing, record a validation limitation.
 Inspect:
 
 - first cell explains purpose/input
+- first cell exposes user-editable inputs rather than only fixture control
 - setup/import cells are near top
 - no unresolved TODOs in critical cells
 - no absolute local paths unless explicitly allowed
@@ -50,6 +53,7 @@ Inspect:
 - optional sections are guarded
 - markdown explains major code sections
 - plots are labelled by code or surrounding markdown
+- any 3D protein structure viewer uses MolViewSpec/Mol* rendering or an explicit skipped-view fallback
 - notebook metadata does not contain unexpected secrets
 
 ### 3. Dependency and Runtime Checks
@@ -87,6 +91,8 @@ For each required fixture:
 - record tolerance mode
 - record failures and warnings
 
+If the notebook also has a user-input default path, validate that path separately from fixture mode.
+
 If only one fixture can be run, explain why others were skipped.
 
 ### 6. Validate Data Contracts
@@ -99,6 +105,7 @@ Confirm:
 
 - required tables/figures/summaries appear
 - visualization cells produce outputs
+- MolViewSpec/Mol* cells produce inline output, `.mvsj`, or a documented fallback when required
 - interpretation/limitations are present
 - validation summary is present when required
 - docs plan artifacts are updated or explicitly deferred

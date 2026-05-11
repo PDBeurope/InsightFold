@@ -1,0 +1,4 @@
+interface:
+  display_name: "Notebook Spec Review"
+  short_description: "Review notebook spec packs before implementation."
+  default_prompt: "Review this InsightFold notebook spec pack for readiness before implementation."

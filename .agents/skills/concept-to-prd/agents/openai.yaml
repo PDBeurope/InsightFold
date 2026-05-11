@@ -1,0 +1,4 @@
+interface:
+  display_name: "Concept To PRD"
+  short_description: "Turn scoped concepts into true PRDs."
+  default_prompt: "Use $concept-to-prd to turn this scoped InsightFold notebook concept into a PRD."

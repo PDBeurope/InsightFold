@@ -26,7 +26,9 @@ The graduation decision has three outcomes: integrate into AFDB/PDBe, keep as a 
 ## Lifecycle Chain
 
 ```text
-$convert-to-prd
+$idea-scoping-interview
+  -> $scoping-decision-capture
+  -> $concept-to-prd
   -> $prd-to-notebook-spec
   -> spec-reviewer + $notebook-spec-review
   -> fixture-curator + $fixture-selection
@@ -42,7 +44,10 @@ Each notebook feature should converge toward:
 ```text
 specs/<feature>/
   requirements.md
+  notebook-ux-contract.md
   notebook-design.md
+  cell-blueprint.md
+  traceability-matrix.md
   tasks.md
   validation.md
   docs-plan.md

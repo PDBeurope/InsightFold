@@ -66,7 +66,9 @@ Supporting workstreams are:
 The current implemented repo chain starts at PRD creation and continues through notebook review:
 
 ```text
-$convert-to-prd
+$idea-scoping-interview
+  -> $scoping-decision-capture
+  -> $concept-to-prd
   -> $prd-to-notebook-spec
   -> .agents/agents/lifecycle/spec-reviewer.md + $notebook-spec-review
   -> .agents/agents/lifecycle/fixture-curator.md + $fixture-selection

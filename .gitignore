@@ -26,3 +26,6 @@ node_modules/
 # OS and temporary files
 .DS_Store
 *.tmp
+
+# Downloaded structural fixture cache
+specs/nmr_restraints/fixtures/cache/

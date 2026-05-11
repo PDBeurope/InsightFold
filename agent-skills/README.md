@@ -1,4 +1,8 @@
-# Using agents and skills to build upon a PRD 
+# Using agents and skills to build upon a PRD
+
+This directory is retained as historical/source material. Canonical reusable skills now live under the repository-level `skills/` directory.
+
+The MolViewSpec rendering skill has moved to `skills/molviewspec-rendering/SKILL.md`.
 
 ## Step 1
 
@@ -25,8 +29,6 @@ Given a specific PRD (see [homodimer_diagnostic_notebook_spec](https://github.co
     ├── lis-implementation/
     │   └── SKILL.md
     ├── pae-visualization/
-    │   └── SKILL.md
-    ├── molviewspec-rendering/
     │   └── SKILL.md
     ├── notebook-assembly/
     │   └── SKILL.md

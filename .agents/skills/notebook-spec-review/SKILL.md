@@ -14,7 +14,10 @@ Use this skill on either a spec-pack directory:
 ```text
 specs/<feature>/
   requirements.md
+  notebook-ux-contract.md
   notebook-design.md
+  cell-blueprint.md
+  traceability-matrix.md
   tasks.md
   validation.md
   docs-plan.md
@@ -25,6 +28,8 @@ specs/<feature>/
 or a consolidated `*_notebook_spec.md`.
 
 Use `assets/spec-review-report-template.md` for the review output. Read `references/research-basis.md` only when the rationale is needed.
+
+If a notebook UX contract exists, use it as the source of truth for the first runnable input cell, user-editable parameters, and fixture/example separation.
 
 ## Review Modes
 
@@ -43,7 +48,10 @@ Default to `readiness` if no mode is specified.
 Confirm the spec includes:
 
 - requirements or user stories
+- notebook UX contract
 - notebook design or section plan
+- cell blueprint
+- requirement traceability matrix
 - implementation tasks
 - fixture manifest
 - data contracts
@@ -113,12 +121,16 @@ For each external API or file:
 Confirm:
 
 - notebook sections match user workflow
+- the first runnable input cell is explicit and user-editable
 - variable handoff table is present or easy to infer
+- cell blueprint identifies user-editable cells, hidden-state risks, and validation hooks
+- traceability matrix links requirements to sections, fixtures, and validation checks
 - hidden-state risks are addressed
 - optional sections cannot break required downstream sections
 - install/setup cells are explicit
 - dependency budget matches the target runtime
 - reusable computations are function/module candidates
+- 3D molecular visualization requirements route through MolViewSpec/Mol* only
 
 ### 7. Check Tasks
 
@@ -143,6 +155,14 @@ Confirm the plan covers:
 - explanation of scientific context and limitations
 
 Notebook markdown can satisfy some documentation requirements, but the spec must say where that documentation will live.
+
+### 9. Check UX Readiness
+
+Confirm:
+
+- a non-developer can run the main analysis without editing internal dicts or function definitions
+- fixtures are examples or validation inputs, not the primary interface
+- the default notebook path is the intended user path, not a fixture harness
 
 ## Severity
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Notebook Review"
+  short_description: "Review scientific notebooks for quality and lifecycle readiness."
+  default_prompt: "Review this InsightFold notebook for scientific, educational, and reproducibility quality."

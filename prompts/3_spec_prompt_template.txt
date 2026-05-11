@@ -1,0 +1,243 @@
+Based on the summary below, produce a complete markdown specification for [PROJECT / PRODUCT / SYSTEM NAME].
+
+This specification will be used for spec-driven development.
+
+It should be:
+- implementation-ready
+- technically precise
+- operationally clear
+- internally consistent
+- detailed enough that an engineer can build from it without ambiguity
+
+[PASTE SUMMARY HERE]
+
+Structure the specification as follows:
+
+---
+
+# [Project/Product/System] Specification
+
+## Overview
+
+Provide a concise overview including:
+- the core problem or question
+- the intended users
+- what the product/system does
+- the primary outcome or value delivered
+- the broader context or ecosystem it fits into
+
+This section should orient both product and engineering readers quickly.
+
+## Domain / Business / Scientific Context
+
+Explain the background knowledge required to implement the system correctly.
+
+Include:
+- key domain concepts
+- operational/business/scientific context
+- why the problem matters
+- how the underlying mechanism/process works
+- what the outputs represent
+- important caveats or interpretation risks
+- misconceptions the product must prevent
+
+Focus specifically on the context developers need in order to make correct implementation decisions.
+
+## Input Specification
+
+Define:
+- accepted input formats
+- required vs optional fields
+- validation logic
+- rejection conditions
+- warning conditions
+- preprocessing requirements
+- external APIs/services used
+- expected request/response formats
+- authentication requirements if applicable
+- error handling behaviour
+- retry/fallback logic if relevant
+
+Be explicit about edge cases.
+
+## System Execution / Processing Logic
+
+Describe:
+- execution flow
+- core algorithms/models/services involved
+- installation/setup requirements
+- dependency management
+- configuration parameters
+- invocation methods
+- runtime assumptions
+- parameter rationale
+- expected intermediate artifacts
+- expected output artifacts
+
+If relevant include:
+- CLI examples
+- API call structures
+- queue/job behaviour
+- caching assumptions
+- orchestration logic
+- performance expectations
+
+## Output Parsing and Interpretation
+
+Specify:
+- output schema
+- important fields and meanings
+- ranking/filtering logic
+- confidence interpretation
+- prioritisation rules
+- failure handling
+- empty-result behaviour
+- ambiguity handling
+- thresholds and heuristics
+
+Describe how outputs should be translated into meaningful user-facing interpretation.
+
+## Visualisations / UI Components
+
+For each visualisation or UI component specify:
+- purpose
+- data source
+- rendering approach/library/framework
+- interaction behaviour
+- interpretation guidance
+- accessibility or usability considerations
+- overlays/highlighting logic
+- fallback behaviour if data missing
+
+If no visualisation exists, specify how outputs should instead be communicated.
+
+## Workflow / User Journey
+
+Describe the full user flow step-by-step.
+
+For each stage include:
+- user action
+- system action
+- UI response
+- processing behaviour
+- outputs generated
+- interpretation guidance
+- decision points
+- loading/error states if relevant
+
+This section should effectively describe the operational behaviour of the product.
+
+## Component / Module Breakdown
+
+List the major implementation components/modules.
+
+For each include:
+- responsibility
+- inputs/outputs
+- dependencies
+- implementation notes
+- integration points
+
+Examples:
+- frontend modules
+- backend services
+- notebook sections
+- API wrappers
+- parsers
+- visualisation layers
+- validation utilities
+- orchestration logic
+
+## User-Facing Explanations and Copy
+
+Write the actual explanatory content (or near-final drafts) the product should include for users.
+
+Include:
+- onboarding explanations
+- interpretation guidance
+- warnings/caveats
+- confidence explanations
+- help/tooltips
+- empty-state messaging
+- error messaging
+- trust/safety messaging
+
+Write this content for the intended audience level.
+
+Avoid placeholder text.
+
+## Data, Logging, and Observability
+
+Specify:
+- what data should be stored
+- logging requirements
+- metrics to collect
+- telemetry/events
+- debugging requirements
+- monitoring expectations
+- auditability requirements
+- privacy/security considerations
+
+Include only what is relevant for the system scope.
+
+## Integration Points
+
+Describe:
+- upstream dependencies
+- downstream consumers
+- export formats
+- APIs
+- workflow integrations
+- automation hooks
+- compatibility requirements
+
+If applicable:
+- what outputs should be reusable elsewhere
+- conditions for promotion to production pipelines
+- interoperability expectations
+
+## Non-Functional Requirements
+
+Specify expectations around:
+- performance
+- scalability
+- reliability
+- latency
+- maintainability
+- portability
+- usability
+- accessibility
+- security
+- cost constraints
+
+Be concrete where possible.
+
+## Out of Scope for v1
+
+Provide an explicit list of:
+- deferred features
+- unsupported workflows
+- postponed integrations
+- known limitations accepted for MVP
+
+For each item include a one-line rationale.
+
+## Open Questions Requiring Resolution Before Build
+
+List unresolved issues still blocking implementation.
+
+For each include:
+- the unresolved question
+- why it matters
+- proposed next step for resolution
+
+---
+
+Produce complete, publication-quality specification text.
+
+Do not use placeholder language like:
+- "[add diagram]"
+- "[describe validation]"
+- "[insert UI copy]"
+
+Instead, generate the actual proposed content based on the summary and decisions already captured.

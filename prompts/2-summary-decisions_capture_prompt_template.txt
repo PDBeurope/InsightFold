@@ -1,0 +1,142 @@
+We have now completed our scoping conversation for [PROJECT / PRODUCT / SYSTEM NAME].
+
+I need you to produce a structured summary that captures everything we covered.
+
+This summary will be used directly to write the:
+- development specification
+- PRD
+- technical design document
+- implementation plan
+
+so it must be comprehensive, precise, and explicit about both decisions and unresolved questions.
+
+Please structure your summary as follows:
+
+---
+
+### 1. The core problem or question
+
+What is the central problem, opportunity, or question this project addresses?
+
+State it clearly in one or two sentences.
+
+Then describe:
+- why this problem matters
+- who it matters to
+- what insight, capability, or outcome this project enables
+- why this approach is meaningful in the broader domain or product ecosystem
+
+### 2. How the system/product works
+
+Summarise the key mechanisms, workflows, or technical concepts relevant to this project.
+
+Include:
+- core operational logic
+- important system components
+- key algorithms/models/processes
+- major inputs and outputs
+- critical metrics or signals
+- assumptions the system relies on
+- known limitations or weaknesses we discussed
+
+Focus on the aspects most relevant to implementation and user interpretation.
+
+### 3. Constraints, caveats, and reliability considerations
+
+List the important limitations, uncertainties, and trust considerations we identified.
+
+Examples may include:
+- model reliability
+- data quality limitations
+- edge cases
+- scientific uncertainty
+- operational constraints
+- infrastructure limitations
+- interpretation risks
+- security/privacy concerns
+- performance bottlenecks
+- situations where outputs should not be trusted
+
+For each important caveat:
+- explain why it matters
+- describe how it should be communicated to users
+- note whether mitigation strategies were discussed
+
+### 4. Scope decisions
+
+For each major product or implementation decision, state:
+- what we decided
+- why we decided it
+- any tradeoffs we accepted
+
+Consider dimensions such as:
+- input methods
+- outputs and reporting
+- filtering or ranking logic
+- integrations
+- visualisations
+- workflow design
+- automation vs manual control
+- trust/explainability features
+- infrastructure choices
+- MVP boundaries
+- deferred functionality
+- user permissions/access
+- scalability assumptions
+
+State decisions explicitly.
+
+Use phrasing like:
+"We decided X because Y."
+
+Do not present resolved decisions as open questions.
+
+### 5. User journey / narrative flow
+
+Describe the intended user experience step by step.
+
+For each stage:
+- what the user does
+- what the system does
+- what the user sees
+- what the user learns or accomplishes
+- where interpretation or decision-making occurs
+- where trust/explanation/context is important
+
+This should read like a walkthrough of the product experience.
+
+### 6. Open questions and deferred decisions
+
+List anything we explicitly left unresolved.
+
+For each item include:
+- the unresolved question
+- why it was deferred
+- what information or validation would help resolve it later
+- any constraints affecting the decision
+
+The goal is to make future continuation easy without re-running discovery.
+
+### 7. Success criteria / signal for graduation
+
+Describe what outcomes, signals, metrics, or validation results would indicate that this project is successful enough to:
+- scale further
+- move into production
+- justify additional investment
+- expand scope
+- automate/precompute
+- operationalise within the broader platform
+
+Also describe:
+- what failure signals would indicate the idea should be stopped or reconsidered
+- what assumptions are most important to validate early
+
+---
+
+Be precise.
+
+Where we made a specific decision, state it as a decision.
+
+Where something remained unresolved, say so explicitly.
+
+Avoid generic summaries — capture reasoning, tradeoffs, and implications in enough detail that another team could continue implementation without needing the original conversation.

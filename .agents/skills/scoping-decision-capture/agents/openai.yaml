@@ -1,0 +1,5 @@
+interface:
+  display_name: "Scoping Decision Capture"
+  short_description: "Summarize scoping decisions and unknowns."
+  default_prompt: "Use $scoping-decision-capture to summarize this scoping conversation into decisions and open questions."
+

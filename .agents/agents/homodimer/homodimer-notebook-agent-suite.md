@@ -102,13 +102,15 @@ Key constraints:
 
 **Scope:** MolViewSpec 4 views, traffic-light HTML summary table, pairwise score agreement matrix, plain-text diagnostic heuristics.
 
+**Primary skill for Section 6:** `$molviewspec-rendering` from `.agents/skills/molviewspec-rendering/SKILL.md`.
+
 Key constraints:
 - Section 6 entirely inside `try/except ImportError`.
 - Traffic-light thresholds from `$homodimer-confidence-scoring` `THRESHOLDS` dict; do not use spec prose values.
 - Diagnostic heuristic logic must cover all five cases from spec §7 (all-high, ipSAE-high/pDockQ-low, pDockQ-high/ipSAE-low, pDockQ2 diverges, LIS-high/ipSAE-low).
 
 **Supporting tool lookup:**
-- `mcp__plugin_context7_context7__query-docs` — MolViewSpec builder API (see [MolViewSpec Deep Dive](#molviewspec-agent--deep-dive)).
+- `mcp__plugin_context7_context7__query-docs` — MolViewSpec builder API (see [MolViewSpec Deep Dive](#molviewspec-skill--deep-dive)).
 
 ---
 
@@ -132,7 +134,9 @@ Final pass: remove redundant intermediate variables, tighten cell boundaries, en
 
 ---
 
-## MolViewSpec Agent — Deep Dive
+## MolViewSpec Skill — Deep Dive
+
+Use `$molviewspec-rendering` from `.agents/skills/molviewspec-rendering/SKILL.md` as the canonical MolViewSpec procedure. The notes below are historical homodimer-specific constraints and additional checks.
 
 Section 6 is the highest-risk section: the `molviewspec` Python API is version-sensitive, sparsely documented in training data, and the per-residue coloring pattern has a performance cliff.
 
@@ -209,9 +213,9 @@ The final cell must:
 - Use `molstar_html()` with fallback from Step 4
 - Wrap the entire section in `try/except ImportError` (already present in current notebook — preserve it)
 
-### Out of scope for the MolViewSpec agent
+### Out of scope for the MolViewSpec skill
 
-Score formula correctness, PAE array indexing, and pLDDT array slicing — these are verified by the `code-reviewer` in Phase 4. The MolViewSpec agent only owns the visualization layer: correct API calls, display method, and coloring strategy.
+Score formula correctness, PAE array indexing, and pLDDT array slicing are verified by the `code-reviewer` in Phase 4. The MolViewSpec skill only owns the visualization layer: correct API calls, display method, and coloring strategy.
 
 ---
 

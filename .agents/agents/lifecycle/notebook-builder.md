@@ -17,6 +17,7 @@ Use `$notebook-from-spec` from `.agents/skills/notebook-from-spec/SKILL.md`.
 Use domain skills as needed, for example:
 
 - `$prd-to-notebook-spec` from `.agents/skills/prd-to-notebook-spec/SKILL.md` for spec interpretation if the spec is incomplete
+- `$molviewspec-rendering` from `.agents/skills/molviewspec-rendering/SKILL.md` when the notebook needs MolViewSpec or Mol* structural visualization
 - domain-specific skills under `.agents/skills/` when the notebook matches those domains
 - future scientific computation, data contract, or visualization skills as they are added
 
@@ -36,7 +37,7 @@ Use domain skills as needed, for example:
 - Create a clear notebook section structure.
 - Preserve explicit variable handoffs.
 - Implement data contract checks before downstream computation.
-- Use fixtures as default runnable examples.
+- Keep the user-input path primary. Use fixtures as default runnable examples only when the reviewed spec or notebook UX contract says to do so.
 - Add explanatory markdown before major code sections.
 - Update `tasks.md` only for completed implementation tasks.
 - Leave validation and review tasks open until performed by the appropriate agents.

@@ -17,11 +17,13 @@ Use:
 
 - notebook
 - spec pack
+- notebook UX contract, if present
 - execution validation report
 - fixture manifest
 - data contracts
 - PRD if needed for intent
 - source code modules touched by the notebook
+- cell blueprint and traceability matrix when present
 
 If execution validation failed, perform review only if the user explicitly asks for partial review.
 
@@ -61,6 +63,7 @@ Check:
 - results are interpreted, not just displayed
 - tutorial/how-to/reference/explanation needs are covered or planned
 - users know what to change and what not to change
+- the first runnable input cell is obvious and matches the intended user workflow
 
 ### 4. Notebook Structure and Maintainability
 
@@ -82,7 +85,7 @@ Check:
 - color choices are consistent and accessible
 - figure size and text are readable
 - visual encodings are explained
-- 3D/interactive views degrade gracefully
+- 3D protein structure views use MolViewSpec/Mol* and degrade gracefully
 
 ### 6. Lifecycle Readiness
 
@@ -94,6 +97,8 @@ Decide recommended next lifecycle state:
 - archive
 
 Consider user value, scientific risk, maintenance burden, feedback readiness, and handoff clarity.
+
+Also consider whether the notebook still feels like a user-facing analysis tool rather than a fixture harness.
 
 ## Severity
 

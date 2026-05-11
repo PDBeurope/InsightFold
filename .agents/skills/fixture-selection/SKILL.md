@@ -30,6 +30,7 @@ Extract:
 
 - target biological object or dataset type
 - required inputs and APIs
+- the notebook UX contract, especially the first runnable input cell
 - success criteria
 - expected computations and visualizations
 - target runtime and dependency constraints
@@ -107,7 +108,9 @@ Add fixture IDs to:
 - `fixture-manifest.md`
 - `validation.md`
 - `tasks.md`
-- notebook parameter/default input section
+- notebook parameter/default input section or UX contract examples
+
+Fixtures should validate the notebook, not become the primary user interface unless the spec explicitly defines a test harness.
 
 Every fixture should have at least one validation check.
 
