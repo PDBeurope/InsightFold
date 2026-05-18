@@ -30,26 +30,29 @@ def _(mo):
 
 
 @app.cell
-def _(form, get_uniprot_data):
+def _(form, get_uniprot_data, make_view_button, mo):
     if form.value is not None:
         uniprot_data = get_uniprot_data(form.value)
         entry_data = get_entry_details(uniprot_data[form.value]['data'])
-    return entry_data, uniprot_data
-
-
-@app.cell
-def _(entry_data, form, mo):
-    if form.value is not None:
+    
         mo.vstack([mo.md(f'# PDB entries mapping to the protein {form.value}'), 
         mo.ui.table(data=entry_data, pagination=True)])
-    return
 
-
-@app.cell
-def _(form, uniprot_data):
-    if form.value is not None:
         mutation_data = get_mutation_info(uniprot_data[form.value]['data'])
-    return (mutation_data,)
+
+        variant_entries = sorted({item['entry'] for item in mutation_data})
+        wild_entries = sorted({item['entry'] for item in entry_data if item['entry'] not in variant_entries})
+
+        mutation_rows = []
+        for item in mutation_data:
+            row = item.copy()
+            row["view"] = make_view_button(
+            row["entry"],
+            form.value,
+            row["uniprot_seq_id"],
+            )
+            mutation_rows.append(row)
+    return mutation_data, mutation_rows, variant_entries, wild_entries
 
 
 @app.cell
@@ -59,7 +62,7 @@ def _(mo):
 
 
 @app.cell
-def _(form, mo, mutation_data, set_selected_variant):
+def _(mo, set_selected_variant):
     def make_view_button(entry_id, uniprot_id, unp_seq_id):
         def on_click(click_count):
             next_count = (click_count or 0) + 1
@@ -73,16 +76,7 @@ def _(form, mo, mutation_data, set_selected_variant):
             kind="warn",
         )
 
-    mutation_rows = []
-    for item in mutation_data:
-        row = item.copy()
-        row["view"] = make_view_button(
-            row["entry"],
-            form.value,
-            row["uniprot_seq_id"],
-        )
-        mutation_rows.append(row)
-    return (mutation_rows,)
+    return (make_view_button,)
 
 
 @app.cell
@@ -109,39 +103,36 @@ def _(form, get_selected_variant, mo, mutation_rows, visualise_variant):
 
 @app.cell
 def _(mo):
-    mo.md("""
-    # Compare variant to wild type
-    """)
-    return
-
-
-@app.cell
-def _(entry_data, form, mutation_data):
-    if form.value is not None:
-        variant_entries = sorted({item['entry'] for item in mutation_data})
-        wild_entries = sorted({item['entry'] for item in entry_data if item['entry'] not in variant_entries})
-    return variant_entries, wild_entries
-
-
-@app.cell
-def _(mo, variant_entries, wild_entries):
-    variant_entry_dropdown = mo.ui.dropdown(
+    def show_wt_variant_options(variant_entries, wild_entries):
+        variant_entry_dropdown = mo.ui.dropdown(
         options=variant_entries,
         value=variant_entries[0] if variant_entries else None,
         label="Select a variant entry",
-    )
-    wild_entry_dropdown = mo.ui.dropdown(
-        options=wild_entries,
-        value=wild_entries[0] if wild_entries else None,
-        label="Select a wild entry",
-    )
+        )
+        wild_entry_dropdown = mo.ui.dropdown(
+            options=wild_entries,
+            value=wild_entries[0] if wild_entries else None,
+            label="Select a wild entry",
+        )
+    
+        return mo.vstack([
+            mo.md('# Compare variant to wild type'),
+            mo.hstack([
+            variant_entry_dropdown,
+            wild_entry_dropdown,
+            
+            ])
+        ])
 
-    mo.hstack([
-        variant_entry_dropdown,
-        wild_entry_dropdown,
-    ])
+    return (show_wt_variant_options,)
 
-    return variant_entry_dropdown, wild_entry_dropdown
+
+@app.cell
+def _(form, show_wt_variant_options, variant_entries, wild_entries):
+    if form.value is not None:
+        asd = show_wt_variant_options(variant_entries, wild_entries)
+    asd or None
+    return
 
 
 @app.cell(hide_code=True)
@@ -171,12 +162,10 @@ def _(
     form,
     mo,
     mutation_data,
-    variant_entries,
     variant_entry_dropdown,
-    wild_entries,
     wild_entry_dropdown,
 ):
-    def show_superpose():
+    def show_superpose(variant_entries, wild_entries):
         if not variant_entries or not wild_entries:
             return mo.md("Need at least one variant entry and one wild-type entry to compare.")
         elif form.value is None:
@@ -187,12 +176,6 @@ def _(
             return comapre_wt_to_variant(wild_entry_dropdown.value, variant_entry_dropdown.value, mutation_data)
     
 
-    return (show_superpose,)
-
-
-@app.cell
-def _(show_superpose):
-    show_superpose()
     return
 
 
