@@ -11,16 +11,7 @@ def _():
     import gemmi
     import marimo as mo
     import requests
-    import biotite.structure.io as strucio
-    import matplotlib.pyplot as plt
     import numpy as np
-    from matplotlib.colors import ListedColormap
-    import biotite.structure.io.pdbx as pdbx
-    import biotite.sequence as seq
-    import biotite
-    from biotite.structure import filter_nucleotides
-    import biotite.structure as struc
-    import biotite.sequence.align as align
     import tempfile
     import gzip
     from collections import defaultdict
@@ -28,26 +19,12 @@ def _():
     from functools import lru_cache
     from concurrent.futures import ThreadPoolExecutor
 
-    return (
-        ThreadPoolExecutor,
-        align,
-        defaultdict,
-        gemmi,
-        gzip,
-        lru_cache,
-        mo,
-        np,
-        pdbx,
-        plt,
-        requests,
-        struc,
-        tempfile,
-    )
+    return ThreadPoolExecutor, defaultdict, gemmi, lru_cache, mo, requests
 
 
 @app.cell
 def _(mo):
-    form = mo.ui.text_area(placeholder="Q9NUW8").form()
+    form = mo.ui.text_area(placeholder="P00519").form()
     mo.vstack([mo.md('# Input Uniprot accession'), form])
     return (form,)
 
@@ -139,9 +116,10 @@ def _(mo):
 
 
 @app.cell
-def _(entry_data, mutation_data):
-    variant_entries = sorted({item['entry'] for item in mutation_data})
-    wild_entries = sorted({item['entry'] for item in entry_data if item['entry'] not in variant_entries})
+def _(entry_data, form, mutation_data):
+    if form.value is not None:
+        variant_entries = sorted({item['entry'] for item in mutation_data})
+        wild_entries = sorted({item['entry'] for item in entry_data if item['entry'] not in variant_entries})
     return variant_entries, wild_entries
 
 
@@ -275,31 +253,6 @@ def _(
         return sup
 
     return (superpose,)
-
-
-@app.cell
-def _(form, superpose):
-    sup = superpose('4wa9', '4twp', form.value)
-    return (sup,)
-
-
-@app.cell
-def _(sup):
-    sup.transform.mat
-    return
-
-
-@app.cell
-def _(sup):
-    sup.transform.vec
-    return
-
-
-@app.cell
-def _(entry_data, mutation_data):
-    entries_with_mutation = [item['entry'] for item in mutation_data]
-    non_mutated_entries = [item['entry'] for item in entry_data if item not in entries_with_mutation]
-    return (non_mutated_entries,)
 
 
 @app.cell
@@ -724,293 +677,6 @@ def _(defaultdict, get_entry_binding_sites):
         return (mutated_bs_sites, assembly_id)
 
     return (is_ligand_binding_site,)
-
-
-@app.cell
-def _():
-    return
-
-
-@app.cell
-def _(non_mutated_entries):
-    non_mutated_entries
-    return
-
-
-@app.cell
-def _get_entry_cif(requests, tempfile):
-    def get_entry_cif(entry_id):
-        """Download the updated cif file from PDBe and write to a NamedTemporaryFile.
-        Returns the path to the temporary file."""
-        url = f'https://www.ebi.ac.uk/pdbe/entry-files/download/{entry_id}_updated.cif'
-        response = requests.get(url)
-        if response.status_code != 200:
-            return None
-
-        wd = '/hps/software/users/pdbe/roshan/InsightFold/src/insightfold/contact_maps'
-        with tempfile.NamedTemporaryFile(
-            dir=wd, prefix=entry_id, suffix=".cif", delete=False
-        ) as temp:
-            temp.write(response.content)
-            temp.flush()
-
-        return temp.name
-
-    return
-
-
-@app.cell
-def _(gzip, pdbx, struc, tempfile):
-    def get_array(entry_file, entry_id):
-        wd = '/hps/software/users/pdbe/roshan/InsightFold/src/insightfold/contact_maps'
-
-        with tempfile.NamedTemporaryFile(
-            dir=wd, prefix=entry_id, suffix=".cif", delete=False
-        ) as temp:
-            with gzip.open(entry_file, "rb") as f_in:
-                temp.write(f_in.read())
-                temp.flush()
-
-        file = pdbx.CIFFile.read(temp.name)
-        assembly = pdbx.get_assembly(file)
-        array = assembly[0]
-
-        protein = array[struc.filter_amino_acids(array)]
-
-        return protein
-
-
-    return (get_array,)
-
-
-@app.cell
-def _(get_array, mt_file, wt_file):
-    wt_array = get_array(wt_file, '4obe')
-    mt_array = get_array(mt_file, '5v9o')
-    return mt_array, wt_array
-
-
-@app.cell
-def _(np, struc):
-    def contact_map(atom_array, threshold=7.0):
-
-        ca = atom_array[atom_array.atom_name == "CA"]
-
-        cell_list = struc.CellList(ca, cell_size=threshold)
-
-        adjacency = cell_list.create_adjacency_matrix(threshold)
-
-        np.fill_diagonal(adjacency, False)
-
-        return adjacency, ca
-
-    return (contact_map,)
-
-
-@app.cell
-def _(mt_array, struc, wt_array):
-    wt_seq = struc.to_sequence(wt_array)[0][0]
-
-    mt_seq = struc.to_sequence(mt_array)[0][0]
-    return mt_seq, wt_seq
-
-
-@app.cell
-def _(align, mt_seq, wt_seq):
-    matrix = align.SubstitutionMatrix.std_protein_matrix()
-
-    alignment = align.align_optimal(
-
-        wt_seq,
-
-        mt_seq,
-
-        matrix,
-
-        gap_penalty=(-10, -1),
-
-        terminal_penalty=False
-
-    )[0]
-    return (alignment,)
-
-
-@app.function
-def alignment_mapping(alignment):
-
-    wt_trace, mt_trace = alignment.trace.T
-
-    wt_to_aln = {}
-
-    mt_to_aln = {}
-
-    for aln_pos, (wt_i, mt_i) in enumerate(zip(wt_trace, mt_trace)):
-
-        if wt_i != -1:
-
-            wt_to_aln[wt_i] = aln_pos
-
-        if mt_i != -1:
-
-            mt_to_aln[mt_i] = aln_pos
-
-    return wt_to_aln, mt_to_aln
-
-
-@app.cell
-def _(alignment):
-    wt_map, mt_map = alignment_mapping(alignment)
-    return mt_map, wt_map
-
-
-@app.cell
-def _(np):
-    def aligned_contact_set(adjacency, ca, residue_map):
-
-        contacts = set()
-
-        pairs = np.argwhere(adjacency)
-
-        for i, j in pairs:
-
-            if i >= j:
-
-                continue
-
-            # map residue indices to alignment positions
-
-            aln_i = residue_map.get(i)
-
-            aln_j = residue_map.get(j)
-
-            # skip gaps/unmapped residues
-
-            if aln_i is None or aln_j is None:
-
-                continue
-
-            contacts.add(tuple(sorted((aln_i, aln_j))))
-
-        return contacts
-
-    return (aligned_contact_set,)
-
-
-@app.cell
-def _(aligned_contact_set, contact_map, mt_array, mt_map, wt_array, wt_map):
-    wt_adj, wt_ca = contact_map(wt_array)
-
-    mt_adj, mt_ca = contact_map(mt_array)
-
-    wt_contacts = aligned_contact_set(
-
-        wt_adj,
-
-        wt_ca,
-
-        wt_map
-
-    )
-
-    mt_contacts = aligned_contact_set(
-
-        mt_adj,
-
-        mt_ca,
-
-        mt_map
-
-    )
-
-    lost = wt_contacts - mt_contacts
-
-    gained = mt_contacts - wt_contacts
-
-    shared = wt_contacts & mt_contacts
-    return gained, lost
-
-
-@app.cell
-def _(gained):
-    len(gained)
-    return
-
-
-@app.cell
-def _(lost):
-    len(lost)
-    return
-
-
-@app.cell
-def _(np, plt):
-    def plot_contact_changes(lost, gained):
-
-        plt.figure(figsize=(10, 10))
-
-        # Lost contacts
-
-        if len(lost) > 0:
-
-            lost_arr = np.array(list(lost))
-
-            plt.scatter(
-
-                lost_arr[:, 0],
-
-                lost_arr[:, 1],
-
-                s=15,
-
-                label="Lost"
-
-            )
-
-        # Gained contacts
-
-        if len(gained) > 0:
-
-            gained_arr = np.array(list(gained))
-
-            plt.scatter(
-
-                gained_arr[:, 0],
-
-                gained_arr[:, 1],
-
-                s=15,
-
-                label="Gained"
-
-            )
-
-        plt.xlabel("Residue index")
-
-        plt.ylabel("Residue index")
-
-        plt.title("Contact Map Differences")
-
-        plt.legend()
-
-        plt.gca().invert_yaxis()
-
-        plt.tight_layout()
-
-        plt.show()
-
-    return (plot_contact_changes,)
-
-
-@app.cell
-def _(gained, lost, plot_contact_changes):
-    plot_contact_changes(lost, gained)
-    return
-
-
-@app.cell
-def _(alignment):
-    alignment
-    return
 
 
 @app.function
