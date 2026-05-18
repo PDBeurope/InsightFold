@@ -144,15 +144,9 @@ def _(mo, variant_entries, wild_entries):
     return variant_entry_dropdown, wild_entry_dropdown
 
 
-@app.cell
-def _(comapre_wt_to_variant, variant_entry_dropdown, wild_entry_dropdown):
-    comapre_wt_to_variant(wild_entry_dropdown.value, variant_entry_dropdown.value)
-    return
-
-
 @app.cell(hide_code=True)
 def comapre_wt_to_variant(form, mo, superpose, viz_superpose):
-    def comapre_wt_to_variant(wild_entry_id, variant_entry_id):
+    def comapre_wt_to_variant(wild_entry_id, variant_entry_id, mutation_data):
         if not wild_entry_id or not variant_entry_id:
             return mo.md("Select both a wild-type and variant entry.")
         if not form.value:
@@ -162,46 +156,43 @@ def comapre_wt_to_variant(form, mo, superpose, viz_superpose):
         return viz_superpose(
             wild_entry_id,
             variant_entry_id,
+            mutation_data,
             sup_result.transform.vec,
             sup_result.transform.mat,
         )
 
 
-    compare_wt_to_variant = comapre_wt_to_variant
-
     return (comapre_wt_to_variant,)
 
 
-@app.cell(hide_code=True)
-def compare_wt_variant_view(
+@app.cell
+def _(
     comapre_wt_to_variant,
     form,
     mo,
+    mutation_data,
     variant_entries,
     variant_entry_dropdown,
     wild_entries,
     wild_entry_dropdown,
 ):
-    if not variant_entries or not wild_entries:
-        mo.md("Need at least one variant entry and one wild-type entry to compare.")
-    elif form.value is None:
-        mo.md("Enter a UniProt accession first.")
-    elif not wild_entry_dropdown.value or not variant_entry_dropdown.value:
-        mo.md("Select both a wild-type and variant entry to render the aligned view.")
-    else:
-        comapre_wt_to_variant(wild_entry_dropdown.value, variant_entry_dropdown.value)
+    def show_superpose():
+        if not variant_entries or not wild_entries:
+            return mo.md("Need at least one variant entry and one wild-type entry to compare.")
+        elif form.value is None:
+            return mo.md("Enter a UniProt accession first.")
+        elif not wild_entry_dropdown.value or not variant_entry_dropdown.value:
+            return mo.md("Select both a wild-type and variant entry to render the aligned view.")
+        else:
+            return comapre_wt_to_variant(wild_entry_dropdown.value, variant_entry_dropdown.value, mutation_data)
+    
 
-    return
+    return (show_superpose,)
 
 
 @app.cell
-def _(superpose, viz_superpose):
-    def compare_wt_variant(entry_1, entry_2, uniprot_id):
-        sup = superpose(entry_1, entry_2, uniprot_id)
-        viz = viz_superpose(entry_1, entry_1, sup.transform.vec, sup.transform.mat)
-        return viz
-    
-
+def _(show_superpose):
+    show_superpose()
     return
 
 
@@ -299,12 +290,6 @@ def _(requests):
             return data
 
     return (get_uniprot_data,)
-
-
-@app.cell
-def _(entry_unp_map):
-    get_uniprot_seq_id_to_entry_seq_id(entry_unp_map, 315)
-    return
 
 
 @app.function
@@ -785,14 +770,13 @@ def viz_superpose(
     get_entry_to_uniprot_map,
     get_preferred_assembly_ids,
     is_ligand_binding_site,
-    mutation_data,
 ):
-    def viz_superpose(entry_1, entry_2, transformation_matrix, rotation_matrix, write_output=False):
+    def viz_superpose(entry_1, entry_2, mutation_data, transformation_matrix, rotation_matrix, write_output=False):
         """Build a Mol* view of two superposed structures using MolViewSpec.
 
         The function accepts either of these call styles:
-        - ``viz_superpose(entry_1, entry_2, sup.transform.vec, sup.transform.mat)``
-        - ``viz_superpose(entry_1, entry_2, sup.transform.mat, sup.transform.vec)``
+        - ``viz_superpose(entry_1, entry_2, mutation_data, sup.transform.vec, sup.transform.mat)``
+        - ``viz_superpose(entry_1, entry_2, mutation_data, sup.transform.mat, sup.transform.vec)``
 
         The first entry is treated as wild type. Residues corresponding to the
         variant UniProt positions are highlighted on ``entry_1`` via UniProt
