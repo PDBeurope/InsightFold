@@ -4,18 +4,12 @@ __generated_with = "0.23.5"
 app = marimo.App(width="medium")
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _():
-    import io
-    import os
     import gemmi
     import marimo as mo
     import requests
-    import numpy as np
-    import tempfile
-    import gzip
     from collections import defaultdict
-    import pandas as pd
     from functools import lru_cache
     from concurrent.futures import ThreadPoolExecutor
 
@@ -25,43 +19,255 @@ def _():
 @app.cell
 def _(mo):
     form = mo.ui.text_area(placeholder="P00519").form()
-    mo.vstack([mo.md('# Input Uniprot accession'), form])
+
+    mo.vstack([
+        mo.md(
+            """# Variant structure explorer
+
+    Enter a UniProt accession to load structures mapped in the PDB, inspect variant-bearing entries, and compare a variant structure against a wild-type structure.
+
+    Use `P00519` if you want a quick example to test the workflow."""
+        ),
+        form,
+    ])
     return (form,)
 
 
 @app.cell
 def _(form, get_uniprot_data, make_view_button, mo):
-    if form.value is not None:
-        uniprot_data = get_uniprot_data(form.value)
-        entry_data = get_entry_details(uniprot_data[form.value]['data'])
-    
-        mo.vstack([mo.md(f'# PDB entries mapping to the protein {form.value}'), 
-        mo.ui.table(data=entry_data, pagination=True)])
+    query = (form.value or "").strip().upper()
+    entry_data = []
+    mutation_data = []
+    mutation_rows = []
+    variant_entries = []
+    wild_entries = []
+    query_error = None
 
-        mutation_data = get_mutation_info(uniprot_data[form.value]['data'])
-
-        variant_entries = sorted({item['entry'] for item in mutation_data})
-        wild_entries = sorted({item['entry'] for item in entry_data if item['entry'] not in variant_entries})
-
-        mutation_rows = []
-        for item in mutation_data:
-            row = item.copy()
-            row["view"] = make_view_button(
-            row["entry"],
-            form.value,
-            row["uniprot_seq_id"],
+    if query:
+        uniprot_data = get_uniprot_data(query) or {}
+        protein_data = uniprot_data.get(query, {}).get("data", [])
+        if protein_data:
+            entry_data = get_entry_details(protein_data)
+            mutation_data = get_mutation_info(protein_data)
+            variant_entries = sorted({item["entry"] for item in mutation_data})
+            wild_entries = sorted(
+                {item["entry"] for item in entry_data if item["entry"] not in variant_entries}
             )
-            mutation_rows.append(row)
-    return mutation_data, mutation_rows, variant_entries, wild_entries
+
+            for item in mutation_data:
+                row = item.copy()
+                row["view"] = make_view_button(
+                    row["entry"],
+                    query,
+                    row["uniprot_seq_id"],
+                )
+                mutation_rows.append(row)
+        else:
+            query_error = f"No PDBe mappings were found for `{query}`."
+
+    if not query:
+        entry_section = mo.md("Enter a UniProt accession above to load mapped PDB entries.")
+    elif query_error:
+        entry_section = mo.md(query_error)
+    else:
+        entry_section = mo.vstack(
+            [
+                mo.md(f"## PDB entries mapped to {query}"),
+                mo.md(
+                    f"This table shows the PDBe entries linked to `{query}`, including the experimental method, resolution, title, and ligand count. `{len(mutation_data)}` single-residue variant annotations were found across `{len(variant_entries)}` entries."
+                ),
+                mo.ui.table(data=entry_data, pagination=True),
+            ]
+        )
+
+    entry_section
+    return (
+        mutation_data,
+        mutation_rows,
+        query,
+        query_error,
+        variant_entries,
+        wild_entries,
+    )
 
 
 @app.cell
+def _(
+    get_selected_variant,
+    mo,
+    mutation_rows,
+    query,
+    query_error,
+    visualise_variant,
+):
+    selected_variant = get_selected_variant()
+
+    if not query:
+        variant_section = mo.md(
+            "Variant entries will appear here after you submit a UniProt accession."
+        )
+    elif query_error:
+        variant_section = mo.md(query_error)
+    else:
+        if not mutation_rows:
+            table_or_message = mo.md(f"No mapped variants were found for `{query}`.")
+        else:
+            table_or_message = mo.ui.table(data=mutation_rows, pagination=True)
+
+        if selected_variant is None or selected_variant[1] != query:
+            viewer = mo.md("Click **View 3D** in the table to render the structure viewer for a specific variant site.")
+        else:
+            viewer = visualise_variant(*selected_variant[:3])
+
+        variant_section = mo.vstack(
+            [
+                mo.md("## Variant-bearing entries"),
+                mo.md(
+                    "Each row is a mapped single-residue variant. Use **View 3D** to open a Mol* view focused on the affected residue and any nearby ligands."
+                ),
+                table_or_message,
+                viewer,
+            ]
+        )
+
+    variant_section
+    return
+
+
+@app.cell
+def _(
+    mo,
+    query,
+    query_error,
+    set_superpose_selection,
+    variant_entries,
+    wild_entries,
+):
+    variant_entry_dropdown = mo.ui.dropdown(
+        options=variant_entries,
+        value=variant_entries[0] if variant_entries else None,
+        label="Select a variant entry",
+    )
+    wild_entry_dropdown = mo.ui.dropdown(
+        options=wild_entries,
+        value=wild_entries[0] if wild_entries else None,
+        label="Select a wild-type entry",
+    )
+
+    def on_superpose_click(click_count):
+        next_count = (click_count or 0) + 1
+        set_superpose_selection(
+            (
+                query,
+                wild_entry_dropdown.value,
+                variant_entry_dropdown.value,
+                next_count,
+            )
+        )
+        return next_count
+
+    superpose_button = mo.ui.button(
+        value=0,
+        on_click=on_superpose_click,
+        label="Superpose",
+        kind="success",
+    )
+
+    if not query:
+        compare_controls = mo.md(
+            "Submit a UniProt accession above to compare a variant entry against a wild-type entry."
+        )
+    elif query_error:
+        compare_controls = mo.md(query_error)
+    elif not variant_entries or not wild_entries:
+        compare_controls = mo.md(
+            "Need at least one variant entry and one wild-type entry to compare structures."
+        )
+    else:
+        compare_controls = mo.vstack(
+            [
+                mo.md("## Compare variant and wild-type structures"),
+                mo.md(
+                    "Choose one variant-containing structure and one wild-type structure, then click **Superpose** to generate the aligned Mol* view below."
+                ),
+                mo.vstack([variant_entry_dropdown, wild_entry_dropdown, superpose_button]),
+            ]
+        )
+
+    compare_controls
+    return variant_entry_dropdown, wild_entry_dropdown
+
+
+@app.cell
+def _(
+    comapre_wt_to_variant,
+    get_superpose_selection,
+    mo,
+    mutation_data,
+    query,
+    query_error,
+    variant_entries,
+    variant_entry_dropdown,
+    wild_entries,
+    wild_entry_dropdown,
+):
+    superpose_selection = get_superpose_selection()
+
+    if not query:
+        compare_view = mo.md(
+            "The superposed structure view will appear here after you submit a UniProt accession."
+        )
+    elif query_error:
+        compare_view = mo.md(query_error)
+    elif not variant_entries or not wild_entries:
+        compare_view = mo.md(
+            "Need at least one variant entry and one wild-type entry to compare structures."
+        )
+    elif not wild_entry_dropdown.value or not variant_entry_dropdown.value:
+        compare_view = mo.md(
+            "Select both a wild-type and variant entry to prepare the aligned view."
+        )
+    elif (
+        superpose_selection is None
+        or superpose_selection[0] != query
+        or superpose_selection[1] != wild_entry_dropdown.value
+        or superpose_selection[2] != variant_entry_dropdown.value
+    ):
+        compare_view = mo.md(
+            "Click **Superpose** to render the aligned wild-type and variant structures for the current selection."
+        )
+    else:
+        compare_view = mo.vstack(
+            [
+                mo.md("## Superposed viewer"),
+                mo.md(
+                    f"The view overlays wild-type entry `{wild_entry_dropdown.value}` with variant entry `{variant_entry_dropdown.value}`. Variant-linked residues and nearby ligands are highlighted when available."
+                ),
+                comapre_wt_to_variant(
+                    wild_entry_dropdown.value,
+                    variant_entry_dropdown.value,
+                    mutation_data,
+                ),
+            ]
+        )
+
+    compare_view
+    return
+
+
+@app.cell(hide_code=True)
 def _(mo):
     get_selected_variant, set_selected_variant = mo.state(None)
-    return get_selected_variant, set_selected_variant
+    get_superpose_selection, set_superpose_selection = mo.state(None)
+    return (
+        get_selected_variant,
+        get_superpose_selection,
+        set_selected_variant,
+        set_superpose_selection,
+    )
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo, set_selected_variant):
     def make_view_button(entry_id, uniprot_id, unp_seq_id):
         def on_click(click_count):
@@ -79,62 +285,6 @@ def _(mo, set_selected_variant):
     return (make_view_button,)
 
 
-@app.cell
-def _(form, get_selected_variant, mo, mutation_rows, visualise_variant):
-    selected_variant = get_selected_variant()
-
-    if (
-        selected_variant is None
-        or form.value is None
-        or selected_variant[1] != form.value
-    ):
-        viewer = mo.md("Click **View 3D** in the table to render the structure viewer.")
-    else:
-        viewer = visualise_variant(*selected_variant[:3])
-
-    mo.vstack([
-        mo.md('# PDB entries with variants'),
-        mo.ui.table(data=mutation_rows, pagination=True),
-        viewer
-    ])
-
-    return
-
-
-@app.cell
-def _(mo):
-    def show_wt_variant_options(variant_entries, wild_entries):
-        variant_entry_dropdown = mo.ui.dropdown(
-        options=variant_entries,
-        value=variant_entries[0] if variant_entries else None,
-        label="Select a variant entry",
-        )
-        wild_entry_dropdown = mo.ui.dropdown(
-            options=wild_entries,
-            value=wild_entries[0] if wild_entries else None,
-            label="Select a wild entry",
-        )
-    
-        return mo.vstack([
-            mo.md('# Compare variant to wild type'),
-            mo.hstack([
-            variant_entry_dropdown,
-            wild_entry_dropdown,
-            
-            ])
-        ])
-
-    return (show_wt_variant_options,)
-
-
-@app.cell
-def _(form, show_wt_variant_options, variant_entries, wild_entries):
-    if form.value is not None:
-        asd = show_wt_variant_options(variant_entries, wild_entries)
-    asd or None
-    return
-
-
 @app.cell(hide_code=True)
 def comapre_wt_to_variant(form, mo, superpose, viz_superpose):
     def comapre_wt_to_variant(wild_entry_id, variant_entry_id, mutation_data):
@@ -143,40 +293,27 @@ def comapre_wt_to_variant(form, mo, superpose, viz_superpose):
         if not form.value:
             return mo.md("Enter a UniProt accession first.")
 
-        sup_result = superpose(wild_entry_id, variant_entry_id, form.value)
-        return viz_superpose(
-            wild_entry_id,
-            variant_entry_id,
-            mutation_data,
-            sup_result.transform.vec,
-            sup_result.transform.mat,
-        )
+        try:
+            sup_result = superpose(wild_entry_id, variant_entry_id, form.value)
+        except Exception as exc:
+            return mo.md(
+                f"Could not superpose `{wild_entry_id}` and `{variant_entry_id}`: {exc}"
+            )
 
+        try:
+            return viz_superpose(
+                wild_entry_id,
+                variant_entry_id,
+                mutation_data,
+                sup_result.transform.vec,
+                sup_result.transform.mat,
+            )
+        except Exception as exc:
+            return mo.md(
+                f"Could not render the aligned view for `{wild_entry_id}` and `{variant_entry_id}`: {exc}"
+            )
 
     return (comapre_wt_to_variant,)
-
-
-@app.cell
-def _(
-    comapre_wt_to_variant,
-    form,
-    mo,
-    mutation_data,
-    variant_entry_dropdown,
-    wild_entry_dropdown,
-):
-    def show_superpose(variant_entries, wild_entries):
-        if not variant_entries or not wild_entries:
-            return mo.md("Need at least one variant entry and one wild-type entry to compare.")
-        elif form.value is None:
-            return mo.md("Enter a UniProt accession first.")
-        elif not wild_entry_dropdown.value or not variant_entry_dropdown.value:
-            return mo.md("Select both a wild-type and variant entry to render the aligned view.")
-        else:
-            return comapre_wt_to_variant(wild_entry_dropdown.value, variant_entry_dropdown.value, mutation_data)
-    
-
-    return
 
 
 @app.cell
@@ -186,11 +323,11 @@ def _(gemmi, requests):
         response = requests.get(url)
         if response.status_code != 200:
             return
-    
+
         doc = gemmi.cif.read_string(response.content)
         st = gemmi.make_structure_from_block(doc.sole_block())
         return st
-                                         
+
 
     return (get_entry_assembly,)
 
@@ -223,29 +360,47 @@ def _(
         ptype = polymer_1.check_polymer_type()
 
         sup = gemmi.calculate_superposition(polymer_1, polymer_2, ptype, gemmi.SupSelect.CaP)
-    
+
         return sup
 
     return (superpose,)
 
 
 @app.cell
-def _(get_entry_to_uniprot_map, is_ligand_binding_site):
+def _(get_entry_to_uniprot_map, is_ligand_binding_site, mo):
     def visualise_variant(entry_id, uniprot_id, unp_seq_id):
         entry_unp_map = get_entry_to_uniprot_map(entry_id, uniprot_id)
         entry_seq_ids = get_uniprot_seq_id_to_entry_seq_id(entry_unp_map, unp_seq_id)
-        (binding_ligands, assembly_id) = is_ligand_binding_site(entry_id, uniprot_id, unp_seq_id)
+        if not entry_seq_ids:
+            return mo.md(
+                f"No residue mapping was found for `{entry_id}` at UniProt position `{unp_seq_id}`."
+            )
+
+        binding_ligands, assembly_id = is_ligand_binding_site(entry_id, uniprot_id, unp_seq_id)
+        if assembly_id is None:
+            return mo.md(f"No preferred assembly could be resolved for `{entry_id}`.")
+
         ligands_to_show = []
         if binding_ligands:
             for lig in binding_ligands:
-                ligands_to_show.append({
-                    "auth_asym_id": lig[2],
-                    "auth_comp_id": lig[1],
-                    "auth_seq_id": lig[3],
-                    "pdbx_PDB_ins_code": lig[4] or ""
-            })
+                ligands_to_show.append(
+                    {
+                        "auth_asym_id": lig[2],
+                        "auth_comp_id": lig[1],
+                        "auth_seq_id": lig[3],
+                        "pdbx_PDB_ins_code": lig[4] or "",
+                    }
+                )
 
-        return viz_variant_with_ligands(entry_id, str(assembly_id), ligands_to_show, entry_seq_ids)
+        try:
+            return viz_variant_with_ligands(
+                entry_id,
+                str(assembly_id),
+                ligands_to_show,
+                entry_seq_ids,
+            )
+        except Exception as exc:
+            return mo.md(f"Could not render the variant viewer for `{entry_id}`: {exc}")
 
     return (visualise_variant,)
 
@@ -973,7 +1128,6 @@ def viz_superpose(
 
 
     viz_supoerpose = viz_superpose
-
     return (viz_superpose,)
 
 
