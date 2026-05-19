@@ -28,7 +28,7 @@ dependencies = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/insightfold"]
+packages = ["src/insightfold", "src/pdbe_interfaces"]
 
 [tool.hatch.build.targets.sdist]
 include = [
