@@ -1010,7 +1010,7 @@ confidence across all metrics" while a traffic light is amber.
 > User note: *"we should maybe add a 3D structure of residues involved with interaction.
 > Currently it nicely shows the 2D view, via a contact matrix and an annotation track."*
 
-### `[ ] R030 — Add a 3D interface view to Section 2`
+### `[x] R030 — Add a 3D interface view to Section 2` — DONE 2026-09-08
 
 **What.** Insert a MolViewSpec view directly after the contact map showing the interface
 residues in 3D, so the 2D contact matrix and the 3D reality sit side by side.
@@ -1552,6 +1552,38 @@ done here, or point them at this file.
 
 ---
 
+
+**R030 outcome, 2026-09-08. Milestone M6 complete.**
+
+**Decision: the chain overview MOVED to Section 2 rather than being duplicated there**, keeping
+its number so cross-references and `MVS_VIEW_LABELS` stay valid. Section 6 now draws Views 2-6
+and says in bold where View 1 went. The module was not modified.
+
+**The argument that settled it was a real constraint, not tidiness.** Each view is a live Mol*
+instance holding a WebGL context; browsers cap concurrent contexts (16 in Chrome and Firefox)
+and silently blank the oldest past the cap. The notebook already sits at six. A seventh showing
+a picture already on the page would spend headroom, an extra BinaryCIF download and an extra
+Mol* boot for no new information. **Verified: 6 iframes before, 6 after.** The executed-notebook
+size delta equals the source delta exactly (+3,776 B), which is arithmetic proof no iframe was
+added.
+
+The reader argument is as strong: the contact map and the 3D view are the *same two arrays* in
+two coordinate systems, and the useful check — "several separated blocks in the map may still
+be one physical patch" — is a comparison. Fifteen cells apart it is a memory exercise. Placing
+the copy next to the map would have left the original doing nothing new.
+
+**The agent corrected its own draft against the fixtures.** Its first version said a short
+residue range on a long chain means a small patch. FX-007 falsifies that (Sptlc3: 21 interface
+residues spanning residues 65-528 of 563), as does FX-010 (CUL3: 60 spanning 441-768). The text
+now says the range is an outer bound, not a size, and points the reader at the count instead.
+That is a claim that would have read as authoritative and been wrong on half the fixtures.
+
+**Local-file mode gained a sentence Section 6 did not need:** that skipping the 3D views costs
+nothing numerically. At Section 2, where the interface is being defined, a reader needs telling
+that the contact map and every score are unaffected.
+
+54 cells, 32 code cells, 0 errors on all four fixtures, 283 doctests.
+
 ## Milestones and execution order
 
 46 tasks in 8 milestones. Execution model, agreed with the user 2026-09-07: each task goes to
@@ -1566,7 +1598,7 @@ review.
 | M3 | Heterodimer support | R020-R025 | 6 | **COMPLETE** 2026-09-08 |
 | M4 | Scoring correctness + Section 4 | R003-R008, R060-R062 | 9 | **COMPLETE** 2026-09-08 |
 | M5 | PAE visuals | R050-R052 | 3 | **COMPLETE** 2026-09-08 |
-| M6 | 3D views | R070-R075, R030 | 7 | R070-R075 done; **R030 remains** |
+| M6 | 3D views | R070-R075, R030 | 7 | **COMPLETE** 2026-09-08 |
 | M7 | Summary + prose | R080-R082, R040 | 4 | |
 | M8 | Validation, docs, cleanup | R090-R095 | 6 | |
 
