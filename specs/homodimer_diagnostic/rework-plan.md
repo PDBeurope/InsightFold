@@ -722,7 +722,7 @@ The `CLAUDE.md` edge-case table already warns that asymmetric chain labels can m
 quadrant slicing. Add an explicit assertion that structure-derived chain lengths equal the
 PAE-derived `nA` / `nB`, and fail loudly rather than silently mis-slicing.
 
-### `[ ] R022 — Remove nA == nB assumptions`
+### `[x] R022 — Remove nA == nB assumptions` — DONE 2026-09-08
 
 **What.** Sweep every cell for places that only work when the chains are the same length.
 
@@ -858,6 +858,44 @@ required. Do not keep advertising a skip that does not happen.
 what was skipped, or fails at the point of upload with an actionable message. Verified by
 running it both ways.
 
+
+**R022 outcome, 2026-09-08.** Audited 17 sites systematically rather than working the plan's
+list, which had gone stale: **three of the four sites the plan named were already fixed** by
+R011-R021, and four real issues the plan did not list were found.
+
+**Already fixed incidentally:** the `score_masks` shape mismatch (R013 derives the mask from
+`block.shape`, and R021's verification makes the two length sources a checked precondition);
+views 3 and 4 indexing per-residue arrays with structure residue lists (R014 takes and
+length-checks `values_x` and `values_y` separately); the profile axes (already `sharex=False`).
+
+**Found and fixed, not in the plan:** the coverage bar clipped residue 0 (`xlim` started at 0,
+not -0.5); cell 12 printed the interface residue range for one chain only; the Section 3
+markdown said "for a homodimer, the matrix has four quadrants", implying four equal blocks;
+and the notebook H1 said "Homodimer Confidence Metric Diagnostic Notebook", false for the
+heterodimer path D3 requires. H1 is now "Dimer Confidence Metric Diagnostic Notebook" — **D6
+respected, the filename is unchanged.**
+
+**Coverage bars fixed for unequal chains.** Residue counts in the tick labels, an end cap on
+each track, and an annotation on the shorter track naming where it ends, so a 69-residue chain
+on a 563-wide axis no longer reads as truncated data.
+
+**New stress fixture: `AF-0000000204661110`**, Sptlc3 (563 aa) + Gm6993 (69 aa), **8.16:1**
+versus 1.79:1 for the standard heterodimer. Found via the search endpoint by ranking 100
+hetero dimers by length ratio. Runs end to end with no crash, no wrong number and no shape
+error. Verified independently: lengths 563/69, labels `Sptlc3 (A)` / `Gm6993 (B)`,
+ipSAE_d0res 0.7120, 42 contact pairs. Register it in R024.
+
+**Gap worth knowing:** both real heterodimer fixtures put the *long* chain first, so `nx < ny`
+never occurs live. Only synthetic cases (30+400, 5+300) cover the reverse orientation. R024
+should look for a short-first fixture.
+
+**Residual, deliberately not fixed here.** At 8.16:1 the `aspect='auto'` distortion stops being
+cosmetic: the 563x69 mask panels render as near-squares, hiding the block's true proportions.
+Axis labels stay correct, so nothing is false. Two of the three sites are already owned
+(R050 for the PAE heatmap, R052 item 4 for the mask panel). **The third, the contact map's
+left panel, is owned by no task — fold it into R050.** Fixing it needs a figure-size change,
+which R022 was forbidden from making.
+
 ## W3 — Section 2, Interface Detection
 
 > User note: *"we should maybe add a 3D structure of residues involved with interaction.
@@ -895,7 +933,13 @@ once at the end of W5-W8 than repeatedly.
 
 ## W5 — Section 3, PAE Matrix Decomposition
 
-### `[ ] R050 — Fix the full PAE heatmap size`
+### `[ ] R050 — Fix the full PAE heatmap size, and the contact map's aspect`
+
+**Added by R022:** `plot_interface_contact_map`'s left panel also uses `aspect='auto'` and is
+owned by no other task. At 8.16:1 (fixture `AF-0000000204661110`) it distorts badly. Fixing it
+needs a figure-size change, which is why R022 left it. Handle it with the heatmap below, since
+both are the same class of fix.
+
 
 > User note: *"reduce the size of the PAE matrix (currently you have an in-cell scroll, which
 > makes it really hard to view it all at the same time)."*
@@ -1202,7 +1246,7 @@ review.
 |---|-----------|-------|---|--------|
 | M1 | Ground truth | R001, R002, R002b, R009 | 4 | R002b added 2026-09-08 |
 | M2 | Module extracted; notebook shrunk 54% | R010, R010b, R011-R016 | 8 | **COMPLETE** 2026-09-08 |
-| M3 | Heterodimer support | R020-R025 | 6 | R020, R021 done; R025 added |
+| M3 | Heterodimer support | R020-R025 | 6 | R020, R021, R022 done |
 | M4 | Scoring correctness + Section 4 | R003-R008, R060-R062 | 9 | R003, R005, R006, R007 landed early in R012 |
 | M5 | PAE visuals | R050-R052 | 3 | |
 | M6 | 3D views | R070-R075, R030 | 7 | |

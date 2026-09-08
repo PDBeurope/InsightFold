@@ -4505,6 +4505,12 @@ def plot_interface_contact_map(
     the interface sits -- one contiguous patch reads very differently from a
     scatter of isolated residues.
 
+    The two coverage tracks share one residue axis so their lengths are
+    comparable, which for a heterodimer means the shorter chain's track stops
+    part-way across. Its terminus is therefore drawn as an end cap and labelled
+    with the residue it ends at, and each track's residue count is in its tick
+    label, so a shorter chain reads as shorter rather than as truncated (R022).
+
     Args:
         contacts: Interface contacts of one ordered chain pair.
         label_x:  Display name for `chain_x`; defaults to `'Chain <id>'`.
@@ -4535,16 +4541,41 @@ def plot_interface_contact_map(
 
     ax2 = axes[1]
     bar_height = 0.35
-    for mask, bottom in ((contacts.mask_x, 0.6), (contacts.mask_y, 0.1)):
+    tracks = ((contacts.mask_x, 0.6, name_x), (contacts.mask_y, 0.1, name_y))
+    for mask, bottom, _name in tracks:
         ax2.bar(np.arange(len(mask)), bar_height, bottom=bottom,
                 color=[COLOUR_IF if is_if else COLOUR_NON_IF for is_if in mask],
                 width=1.0, linewidth=0)
 
-    ax2.set_xlim(0, max(nx, ny))
+    # Both tracks share one residue axis, so their lengths are directly
+    # comparable -- which is the point of drawing them together, and which means
+    # the shorter chain necessarily stops part-way across. Say where it stops
+    # (R022): otherwise the empty remainder reads as a truncated bar, i.e. as
+    # missing data, rather than as the end of a shorter protein.
+    n_longest = max(nx, ny)
+    for mask, bottom, name in tracks:
+        end = len(mask)
+        middle = bottom + bar_height / 2.0
+        ax2.plot([end - 0.5, end - 0.5], [bottom, bottom + bar_height],
+                 color='#333333', linewidth=1.4, solid_capstyle='butt',
+                 zorder=3)
+        if end == n_longest:
+            continue
+        # Annotate into whichever side of the end cap has room, so a chain that
+        # ends close to the right edge does not write over the legend.
+        near_right = end > 0.75 * n_longest
+        ax2.annotate(
+            f'{name} ends at residue {end}',
+            xy=(end - 0.5, middle),
+            xytext=(-6 if near_right else 6, 0), textcoords='offset points',
+            ha='right' if near_right else 'left', va='center',
+            fontsize=8, color='#333333', zorder=4)
+
+    ax2.set_xlim(-0.5, n_longest - 0.5)
     ax2.set_ylim(0, 1.1)
     ax2.set_yticks([0.275, 0.775])
-    ax2.set_yticklabels([name_y, name_x])
-    ax2.set_xlabel('Residue index')
+    ax2.set_yticklabels([f'{name_y}\n{ny} res', f'{name_x}\n{nx} res'])
+    ax2.set_xlabel('Residue index (both chains on one scale)')
     ax2.set_title('Interface Coverage\n'
                   '(amber = at interface, grey = non-interface)')
     ax2.legend(
