@@ -6248,7 +6248,7 @@ def plot_pae_score_masks(
     name_y = _chain_label(contacts.chain_y, label_y)
     masks = score_masks(pair, contacts, pae_cutoff=pae_cutoff, lis_cutoff=lis_cutoff)
     titles = {
-        'iptm_d0chn': 'ipTM  (all inter-chain, no cutoff)',
+        'iptm_d0chn': 'ipTM_d0chn (all inter-chain, no cutoff)',
         'ipsae': f'ipSAE (PAE < {pae_cutoff:.0f} Å)',
         'lis': f'LIS   (PAE < {lis_cutoff:.0f} Å)',
         'pdockq2': f'pDockQ2 (CB-CB ≤ {contacts.dist_cutoff:.0f} Å contacts)',

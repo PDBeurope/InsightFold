@@ -1078,6 +1078,43 @@ Reserved for R074's 3D view, where the contact set is visible.
 
 250 doctests pass. Four fixtures execute end to end, plus a fifth run with `DIRECTION='yx'`.
 
+
+**R061 outcome, 2026-09-08. Milestone M4 complete.**
+
+Section 4 is now 4.1 ipTM_d0chn, 4.2 ipSAE (all three variants together, since they differ
+only in what `L` is fed to `d0_func`), 4.3 pDockQ, 4.4 pDockQ2, 4.5 LIS, 4.6 combined. Each
+subsection: what it measures in plain language, the formula, the reasoning from the
+publication, how to read the number, then the computation.
+
+**56 publication claims, every one page-cited.** Eight of the load-bearing ones were
+independently spot-checked against the PDFs and all were found on the exact page claimed,
+including Dunbrack's RAF1/RIPK1 walk-down (ipTM 0.290 -> 0.459 with the cutoff -> 0.044 with
+per-residue d0), Bryant's "AUC of 0.95" for the product and "average error of 0.11", Zhu's
+"large, highly confident incorrect interfaces", and the AFDB note's 63% -> 18% homodimer
+false-positive figure.
+
+**Seven claims could not be sourced and are labelled as such in the prose rather than
+asserted**, including the LIS linear transform `(12 - PAE)/12`: Kim says only "inversely
+mapping PAE values to a 0-to-1 scale", so the linear form comes from the reference
+implementation, not the paper. The notebook says so.
+
+The agent also declined to make six claims earlier drafts had suggested, among them that
+pDockQ2 supersedes pDockQ, and any authorial rationale for LIS averaging rather than taking a
+max. Refusing to source-dress an inference is the behaviour this task needed.
+
+**Both known text defects fixed:** the backwards `ipSAE_d0chn` description ("Conservative
+variant. Penalises small interfaces more" -> "Most permissive variant"), and the
+`plot_pae_score_masks` panel title that still said `ipTM` after the R004 rename.
+
+**Numerical equivalence at full float precision** on both fixtures: all seven values identical
+to 16 significant figures. Four fixtures execute end to end, 26 code cells each, zero errors.
+
+**Open judgement call for R080.** Each compute cell now prints its band label and threshold
+provenance next to the number, which answers "how to read this" where the reader is looking.
+It reads the same canonical `THRESHOLDS` as Section 7, so they cannot disagree, but the band
+appears twice. If Section 7 should own it exclusively, remove the `traffic_light` lines in
+cells `cell-016b/f/h/j` and the loop in `cell-016d`.
+
 ## W5 — Section 3, PAE Matrix Decomposition
 
 ### `[ ] R050 — Fix the full PAE heatmap size, and the contact map's aspect`
@@ -1146,7 +1183,7 @@ sure it makes sense."* The audit is complete and is recorded in R001. Net result
 notebook is correct on pDockQ, pDockQ2 and LIS (where `CLAUDE.md` is wrong), and has one real
 bug of its own (d0dom asymmetry) plus one edge-case divergence (`L == 27`).
 
-### `[ ] R061 — Restructure Section 4 into per-score subsections`
+### `[x] R061 — Restructure Section 4 into per-score subsections` — DONE 2026-09-08
 
 > User note: *"We should [have] a section for each score, explain the formula, explain the
 > thinking behind it based on the publication, and then calculate it, before moving on to the
@@ -1394,7 +1431,7 @@ review.
 | M1 | Ground truth | R001, R002, R002b, R009 | 4 | R002b added 2026-09-08 |
 | M2 | Module extracted; notebook shrunk 54% | R010, R010b, R011-R016 | 8 | **COMPLETE** 2026-09-08 |
 | M3 | Heterodimer support | R020-R025 | 6 | **COMPLETE** 2026-09-08 |
-| M4 | Scoring correctness + Section 4 | R003-R008, R060-R062 | 9 | R003-R008, R060, R062 done; **R061 remains** |
+| M4 | Scoring correctness + Section 4 | R003-R008, R060-R062 | 9 | **COMPLETE** 2026-09-08 |
 | M5 | PAE visuals | R050-R052 | 3 | |
 | M6 | 3D views | R070-R075, R030 | 7 | |
 | M7 | Summary + prose | R080-R082, R040 | 4 | |
