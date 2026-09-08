@@ -492,7 +492,7 @@ Per D10, `interface.py` itself stays on disk until R095.
 - `interface.py`'s dataclasses (`ChainCoords`, `InterfaceResult`) are worth keeping; they are
   the natural carrier for the explicit chain-pair API in D4.
 
-### `[ ] R016 — Switch the notebook onto the module and delete the inline code`
+### `[x] R016 — Switch the notebook onto the module and delete the inline code` — DONE 2026-09-08
 
 **This is the task that delivers the decluttering.** R011-R014 build module functions
 *alongside* the notebook's own copies, so that the notebook never breaks mid-refactor. Until
@@ -624,6 +624,48 @@ whitespace is not significant there; the loop ends at the next data name, `loop_
 Neither fixture triggers it, but any file with an internal blank line would have been parsed
 with a truncated atom list and no error. The new module handles it correctly. This is a good
 argument for R095 actually happening rather than the file lingering.
+
+
+**R016 outcome, 2026-09-08. The decluttering is delivered.**
+
+**1201 -> 556 code lines (-645, -53.7%).** Excluding the untouched bootstrap cell, -62.3%.
+Cell count 29 -> 28: the scoring-functions cell was deleted outright rather than emptied,
+since it contained nothing but definitions the module now owns. Biggest reductions: MolViewSpec
+156->30, scoring functions 120->0, mmCIF parsing 97->7, pLDDT figure 64->10, contact map 40->1.
+
+**Equivalence held.** Both fixtures executed end to end via `nbconvert --execute` before and
+after. Every score and every printed statistic is unchanged: chain lengths, PAE shapes, quadrant
+shapes, pLDDT means, contact pairs, interface counts and ranges, mask cell counts, pDockQ/
+pDockQ2 intermediates, LIS valid counts, d0 values, argmax residues, and the full diagnostic
+prose. Four of six figures are byte-identical by SHA-256; the two that differ are the
+intended threshold and directional-fix changes. Independently re-verified by the orchestrator
+on the heterodimer: 0 errors, 0 stderr, 15 figures, all seven scores matching.
+
+**Removing the blanket `warnings.filterwarnings('ignore')` surfaced nothing.** Zero warnings on
+either fixture. The agent verified the harness was not swallowing them (a probe notebook shows
+warnings reaching stderr normally) and established that the expected molviewspec
+`PydanticDeprecatedSince20` only appears under `simplefilter('always')`, since Python's default
+filter hides third-party DeprecationWarnings anyway. No narrow suppression was needed. The
+blanket filter was hiding nothing this notebook produces.
+
+**`%matplotlib inline` was required in the imports cell.** The module's `plot_*` functions
+return bare `Figure` objects built without pyplot, so `plt.show()` cannot render them and
+`display(fig)` emits only `text/plain` unless the inline figure formatters are registered. The
+magic registers them; the notebook no longer imports pyplot at all.
+
+**Found and deliberately not fixed here.**
+- **R020 confirmed live.** On the heterodimer, cell 11 reports chain B's UniProt ID, protein
+  name and length as if they were the complex's. Left for M3 with a `TODO(R020)` at the call
+  site.
+- **Endpoint order returned B-first on both fixtures this run**, consistent with the recorded
+  non-determinism. The notebook no longer indexes `entries[0]` anywhere; the only remaining
+  positional index is `AFDBPrediction.primary_entry` in the module, already marked.
+- **For R052:** `plot_pae_score_masks` hard-codes the panel title `'ipTM  (all inter-chain, no
+  cutoff)'`, so that one figure still says `ipTM` while every other label now says
+  `ipTM_d0chn` (R004). `complex_interface_utils.py:3925`.
+- **For R061:** the summary-table description "ipSAE_d0chn: Conservative variant. Penalises
+  small interfaces more" is backwards. `d0chn >= d0dom >= d0res` is a theorem, so d0chn is the
+  most permissive variant. Carried over verbatim rather than silently reworded.
 
 ## W2 — Heterodimer support
 
@@ -1081,7 +1123,7 @@ review.
 | # | Milestone | Tasks | n | Status |
 |---|-----------|-------|---|--------|
 | M1 | Ground truth | R001, R002, R002b, R009 | 4 | R002b added 2026-09-08 |
-| M2 | Module extracted; **R016 is where the notebook actually shrinks** | R010, R010b, R011-R016 | 8 | R010, R010b, R011-R015 done; **R016 next** |
+| M2 | Module extracted; notebook shrunk 54% | R010, R010b, R011-R016 | 8 | **COMPLETE** 2026-09-08 |
 | M3 | Heterodimer support | R020-R024 | 5 | |
 | M4 | Scoring correctness + Section 4 | R003-R008, R060-R062 | 9 | R003, R005, R006, R007 landed early in R012 |
 | M5 | PAE visuals | R050-R052 | 3 | |
