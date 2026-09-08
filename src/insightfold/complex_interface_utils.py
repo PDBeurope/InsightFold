@@ -109,7 +109,8 @@ runs off them; R016 switches the call sites over.
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass
+import textwrap
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple
 
 import matplotlib
@@ -137,6 +138,17 @@ __all__ = [
     "download_structure",
     "download_pae",
     "download_plddt",
+    "AccessionLookupError",
+    # assembly detection (R023)
+    "SUPPORTED_N_CHAINS",
+    "SUPPORTED_OLIGOMERIC_STATE",
+    "AFDB_SEARCH_URL",
+    "AFDB_DIMER_SEARCH",
+    "EXAMPLE_DIMER_ACCESSION",
+    "UnsupportedAssemblyError",
+    "AssemblyDescription",
+    "describe_assembly",
+    "format_composition",
     "format_metadata_report",
     # structure parsing
     "ChainCoords",
@@ -572,14 +584,77 @@ def fetch_afdb_metadata(accession: str, timeout: float = DEFAULT_TIMEOUT) -> AFD
         An `AFDBPrediction` holding *all* per-chain entries.
 
     Raises:
-        ValueError:         If the endpoint returns an empty array, i.e. the
-                            accession does not exist.
-        requests.HTTPError: On a non-2xx status.
+        AccessionLookupError: If the accession is malformed, unknown, or the
+            endpoint is unreachable. A `ValueError` subclass. This is the *only*
+            failure mode: `requests.HTTPError` is deliberately not allowed to
+            escape (R023), because `400 Client Error: Bad Request for url: ...`
+            tells a user pasting an accession into a Run-all notebook neither
+            what a valid accession looks like nor what to do next.
+
+    Example
+    -------
+    The message names the input, quotes the service, and says what to try:
+
+    >>> try:                                       # doctest: +SKIP
+    ...     fetch_afdb_metadata('AF-NOT_A_REAL_ACCESSION')
+    ... except AccessionLookupError as exc:
+    ...     print(str(exc).splitlines()[0])
+    AFDB rejected the accession 'AF-NOT_A_REAL_ACCESSION' as malformed (HTTP 400).
     """
-    payload = download_json(AFDB_PREDICTION_URL.format(accession=accession), timeout=timeout)
+    url = AFDB_PREDICTION_URL.format(accession=accession)
+    try:
+        response = requests.get(url, timeout=timeout)
+    except requests.RequestException as exc:
+        raise AccessionLookupError(
+            f"Could not reach the AFDB prediction endpoint for {accession!r}.\n"
+            f"  found     : the request to {url}\n"
+            f"              failed with {type(exc).__name__}: {exc}\n"
+            f"  what to do: this is a network problem, not a problem with the "
+            f"accession.\n"
+            f"              Check the connection and re-run this cell. On Colab, "
+            f"re-running\n"
+            f"              the cell is usually enough; the notebook keeps no "
+            f"partial state."
+        ) from exc
+
+    if not response.ok:
+        said = _service_error_text(response)
+        if response.status_code == 404:
+            headline = (f"AFDB has no prediction for {accession!r} "
+                        f"(HTTP 404).")
+            found = ("  found     : the accession is well formed, but the database "
+                     "holds no model\n              under it.")
+        elif response.status_code == 400:
+            headline = (f"AFDB rejected the accession {accession!r} as malformed "
+                        f"(HTTP {response.status_code}).")
+            found = ("  found     : the endpoint refused the identifier before "
+                     "looking anything up.")
+        else:
+            headline = (f"AFDB could not return a prediction for {accession!r} "
+                        f"(HTTP {response.status_code}).")
+            found = ("  found     : the endpoint answered with an error status.")
+        if said:
+            found += f"\n              the service said: {said}"
+        raise AccessionLookupError(
+            f"{headline}\n{found}\n{_accession_advice(accession)}")
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise AccessionLookupError(
+            f"AFDB answered for {accession!r} with something that is not JSON.\n"
+            f"  found     : {response.text[:120]!r}\n"
+            f"{_accession_advice(accession)}"
+        ) from exc
+
     entries = payload if isinstance(payload, list) else [payload]
+    entries = [entry for entry in entries if isinstance(entry, dict)]
     if not entries:
-        raise ValueError(f"No AFDB prediction found for {accession!r}.")
+        raise AccessionLookupError(
+            f"AFDB returned an empty result for {accession!r}.\n"
+            f"  found     : the endpoint answered 200 but described no model, "
+            f"so there is\n              nothing to download or score.\n"
+            f"{_accession_advice(accession)}")
     return AFDBPrediction(accession=accession, entries=tuple(entries))
 
 
@@ -596,6 +671,870 @@ def download_pae(prediction: AFDBPrediction, timeout: float = DEFAULT_TIMEOUT) -
 def download_plddt(prediction: AFDBPrediction, timeout: float = DEFAULT_TIMEOUT) -> Any:
     """Download the raw pLDDT JSON for a prediction. Feed it to `parse_plddt`."""
     return download_json(prediction.plddt_url, timeout=timeout)
+
+
+# --- assembly detection (R023) ----------------------------------------------
+# Two independent kinds of evidence describe what a prediction *is*:
+#
+#   declared -- `assemblyType`, `oligomericState`, `complexComposition` and
+#               `isComplex`, asserted by the AFDB metadata endpoint;
+#   observed -- the chains actually present in the mmCIF / PAE / pLDDT documents
+#               and the UniProt accession each of them resolves to.
+#
+# They are produced by different parts of the pipeline and can disagree, so this
+# module reconciles them and *shows both* rather than picking a winner behind the
+# reader's back. Nothing downstream branches on the answer -- every score is
+# computed from the chains themselves, D3 -- so a disagreement is a reporting
+# problem, not a scoring one, and is reported as such.
+#
+# The dimer restriction (D4) is enforced here too, because a valid prediction the
+# notebook cannot analyse should say so in one sentence rather than crash eight
+# cells later on an index that does not exist.
+
+SUPPORTED_N_CHAINS: int = 2
+"""Number of chains this notebook analyses. D4: it scores one ordered chain pair."""
+
+SUPPORTED_OLIGOMERIC_STATE: str = "dimer"
+"""`oligomericState` value corresponding to `SUPPORTED_N_CHAINS`."""
+
+AFDB_SEARCH_URL: str = "https://alphafold.ebi.ac.uk/api/search"
+"""AFDB search endpoint, used to point a user at an accession that *will* work.
+
+Undocumented in `CLAUDE.md`; R093 should add it. Measured 2026-09-08:
+`isComplex:true` returns 2 010 763 hits and `oligomericState:dimer` returns the
+same 2 010 763, while `oligomericState:trimer` and `oligomericState:tetramer`
+return zero. **Every complex in AFDB is a dimer**, which is why the >2-chain
+path below can only be reached by a local mmCIF."""
+
+AFDB_DIMER_SEARCH: str = (
+    f"{AFDB_SEARCH_URL}?q=oligomericState:dimer&type=main&rows=5"
+)
+"""A ready-made search for accessions this notebook does support."""
+
+EXAMPLE_DIMER_ACCESSION: str = "AF-0000000065889468"
+"""A homodimer, quoted in error messages so the fix is copy-pasteable."""
+
+_OLIGOMERIC_NAMES: Dict[int, str] = {
+    1: "monomer", 2: "dimer", 3: "trimer", 4: "tetramer",
+    5: "pentamer", 6: "hexamer", 7: "heptamer", 8: "octamer",
+}
+"""Chain count to the word AFDB's `oligomericState` would use for it."""
+
+
+class AccessionLookupError(ValueError):
+    """
+    The accession could not be turned into a prediction.
+
+    A `ValueError` subclass so that a caller already catching `ValueError` keeps
+    working. Raised instead of letting `requests.HTTPError` reach the user,
+    whose text (`400 Client Error: Bad Request for url: ...`) says nothing about
+    what a valid accession looks like or what to do next.
+    """
+
+
+class UnsupportedAssemblyError(ValueError):
+    """
+    The prediction is real and readable, but not something this notebook scores.
+
+    A monomer, or anything with more than two chains. Every metric here is an
+    *inter-chain* measurement, so the honest response is a refusal that names the
+    limit, not a zero or an `IndexError`.
+    """
+
+
+def _accession_advice(accession: str) -> str:
+    """The shared 'what a valid accession looks like, and what to do' footer."""
+    return (
+        "  expected  : an AFDB model accession -- "
+        f"'{EXAMPLE_DIMER_ACCESSION}' (a two-chain complex),\n"
+        "              'AF-P0A6Q3-F1' (one UniProt entry), or a bare UniProt "
+        "accession\n"
+        "              such as 'P0A6Q3'.\n"
+        f"  what to do: check ACCESSION_ID = {accession!r} in the input cell for a "
+        "typo. To find\n"
+        "              an accession this notebook supports:\n"
+        f"                {AFDB_DIMER_SEARCH}\n"
+        "              To analyse a structure of your own instead, set "
+        "USE_LOCAL_FILE = True."
+    )
+
+
+def _service_error_text(response: "requests.Response") -> str:
+    """The service's own `error` string, when it sent one, else `''`."""
+    try:
+        body = response.json()
+    except ValueError:
+        return ""
+    if isinstance(body, dict):
+        return str(body.get("error") or body.get("message") or "")
+    return ""
+
+
+def _wrap_inline(parts: Sequence[str], indent: int, width: int = 74) -> str:
+    """A comma-joined list, wrapped onto continuation lines at `indent` spaces."""
+    lines: List[str] = []
+    current = ""
+    for i, part in enumerate(parts):
+        piece = part + ("," if i < len(parts) - 1 else "")
+        if current and indent + len(current) + 1 + len(piece) > width:
+            lines.append(current)
+            current = piece
+        else:
+            current = f"{current} {piece}".strip()
+    if current:
+        lines.append(current)
+    return ("\n" + " " * indent).join(lines)
+
+
+def _normalise_composition(raw: Any) -> Tuple[Tuple[str, int], ...]:
+    """
+    `complexComposition` as a sorted `((identifier, stoichiometry), ...)` tuple.
+
+    Sorted so that two compositions listing the same proteins in different orders
+    compare equal -- the endpoint's ordering is no more trustworthy here than its
+    entry ordering was (R020).
+
+    Example
+    -------
+    >>> _normalise_composition([{'identifierType': 'uniprotAccession',
+    ...                          'identifier': 'P63166', 'stoichiometry': 1},
+    ...                         {'identifierType': 'uniprotAccession',
+    ...                          'identifier': 'Q96AZ6', 'stoichiometry': 1}])
+    (('P63166', 1), ('Q96AZ6', 1))
+    >>> _normalise_composition(None)
+    ()
+    """
+    if not isinstance(raw, (list, tuple)):
+        return ()
+    items: Dict[str, int] = {}
+    for member in raw:
+        if not isinstance(member, dict):
+            continue
+        identifier = str(member.get("identifier") or "").strip()
+        if not identifier:
+            continue
+        try:
+            count = int(member.get("stoichiometry") or 1)
+        except (TypeError, ValueError):
+            count = 1
+        items[identifier] = items.get(identifier, 0) + count
+    return tuple(sorted(items.items()))
+
+
+def format_composition(composition: Sequence[Tuple[str, int]]) -> str:
+    """
+    A composition as a reader's phrase: `'P0A6Q3 x2'`, `'Q96AZ6 x1 + P63166 x1'`.
+
+    Args:
+        composition: `((identifier, stoichiometry), ...)`.
+
+    Returns:
+        The phrase, or `'unknown'` when the composition is empty.
+
+    Example
+    -------
+    >>> format_composition((('P0A6Q3', 2),))
+    'P0A6Q3 x2'
+    >>> format_composition((('P63166', 1), ('Q96AZ6', 1)))
+    'P63166 x1 + Q96AZ6 x1'
+    >>> format_composition(())
+    'unknown'
+    """
+    if not composition:
+        return "unknown"
+    return " + ".join(f"{identifier} x{count}" for identifier, count in composition)
+
+
+def _declared_field(
+    prediction: Optional[AFDBPrediction], *names: str
+) -> Tuple[Any, Optional[str]]:
+    """
+    A whole-complex metadata value, plus a conflict string if the entries differ.
+
+    `AFDBPrediction.shared_field` *raises* when the per-chain entries disagree,
+    which is right for a document URL (a disagreement there breaks the download)
+    but wrong for an assembly label (a disagreement there is exactly the thing
+    this task exists to surface). So this reports instead of raising.
+    """
+    if prediction is None:
+        return None, None
+    seen: Dict[str, Tuple[Any, List[str]]] = {}
+    for chain_id in prediction.chain_ids:
+        value = prediction.chain_field(chain_id, *names, default=None)
+        if value is None or value == "":
+            continue
+        key = repr(value)
+        seen.setdefault(key, (value, []))[1].append(chain_id)
+    if not seen:
+        return None, None
+    if len(seen) == 1:
+        return next(iter(seen.values()))[0], None
+    detail = "; ".join(
+        f"{', '.join(chains)} say {value!r}" for value, chains in sorted(
+            seen.values(), key=lambda item: item[1])
+    )
+    return None, (
+        f"the per-chain metadata entries disagree about "
+        f"{' / '.join(names)}: {detail}. Neither is taken as the complex's."
+    )
+
+
+_ASSEMBLY_ROW_WIDTH: int = 76
+"""Wrap width for the assembly block. Wider than `_REPORT_WIDTH`'s rule because
+`complexComposition` can carry two 10-character accessions and a URL must not be
+broken across lines."""
+
+
+def _wrap_row(label: str, value: str, width: int = _ASSEMBLY_ROW_WIDTH,
+              label_width: int = 14) -> List[str]:
+    """
+    `'Label         : value'`, wrapped onto hanging-indented continuation lines.
+
+    URLs and accessions are never broken mid-token, so a wrapped line can still
+    be copied and pasted.
+
+    Example
+    -------
+    >>> for line in _wrap_row('Assembly', 'alpha beta gamma delta', width=36):
+    ...     print(line)
+    Assembly      : alpha beta gamma
+                    delta
+    """
+    head = f"{label:<{label_width}}: "
+    pieces = textwrap.wrap(value, width=max(width - len(head), 20),
+                           break_long_words=False, break_on_hyphens=False) or [""]
+    return [head + pieces[0]] + [" " * len(head) + piece for piece in pieces[1:]]
+
+
+@dataclass(frozen=True)
+class AssemblyDescription:
+    """
+    What this prediction is, from both kinds of evidence, with the gaps named.
+
+    Built by `describe_assembly`. Holds the AFDB metadata's *declaration* and the
+    chains' own *observation* side by side, never collapsed into one number:
+    they are produced independently and, when they disagree, the reader is the
+    only one who can judge which to believe. `conflicts` is the list of those
+    disagreements, in plain English.
+
+    Attributes:
+        accession:            The accession this describes.
+        chain_ids:            The chains, sorted. Observed from the structure and
+                              documents when `chains_observed`, otherwise the
+                              chains the metadata endpoint happened to describe.
+        chain_lengths:        `{chain_id: n_residues}`, empty when not yet parsed.
+        chains_observed:      Whether `chain_ids` comes from the structure/PAE
+                              (authoritative) or from the metadata alone (not).
+        observed_composition: `((uniprot, count), ...)` resolved from the chains
+                              themselves; `()` when a chain's identity is unknown.
+        declared_type:        `assemblyType`: `'Homo'`, `'Hetero'` or `None`.
+        declared_state:       `oligomericState`, e.g. `'dimer'`, or `None`.
+        declared_description: `oligomericStateDescription`, e.g. `'Heterodimer'`.
+        declared_composition: `complexComposition`, normalised and sorted.
+        declared_is_complex:  `isComplex`, or `None` when absent.
+        conflicts:            Disagreements between the two, as sentences.
+
+    Example
+    -------
+    >>> homo = AFDBPrediction('AF-1', (
+    ...     {'chainId': 'A', 'uniprotAccession': 'P0A6Q3', 'assemblyType': 'Homo',
+    ...      'oligomericState': 'dimer', 'isComplex': True,
+    ...      'complexComposition': [{'identifier': 'P0A6Q3', 'stoichiometry': 2}]},
+    ...     {'chainId': 'B', 'uniprotAccession': 'P0A6Q3', 'assemblyType': 'Homo',
+    ...      'oligomericState': 'dimer', 'isComplex': True,
+    ...      'complexComposition': [{'identifier': 'P0A6Q3', 'stoichiometry': 2}]}))
+    >>> assembly = describe_assembly(homo, {'A': 172, 'B': 172})
+    >>> assembly.noun
+    'homodimer'
+    >>> assembly.headline
+    'Homodimer -- 2 chains (A, B), one protein in 2 copies: P0A6Q3 x2'
+    >>> assembly.conflicts
+    ()
+    """
+
+    accession: str
+    chain_ids: Tuple[str, ...] = ()
+    chain_lengths: Dict[str, int] = field(default_factory=dict)
+    chains_observed: bool = False
+    observed_composition: Tuple[Tuple[str, int], ...] = ()
+    declared_type: Optional[str] = None
+    declared_state: Optional[str] = None
+    declared_description: Optional[str] = None
+    declared_composition: Tuple[Tuple[str, int], ...] = ()
+    declared_is_complex: Optional[bool] = None
+    conflicts: Tuple[str, ...] = ()
+    metadata_present: bool = False
+
+    @property
+    def n_chains(self) -> int:
+        """How many chains there are. Trustworthy only when `chains_observed`."""
+        return len(self.chain_ids)
+
+    @property
+    def n_distinct_proteins(self) -> int:
+        """Distinct proteins among the chains; `0` when their identity is unknown."""
+        return len(self.observed_composition)
+
+    @property
+    def observed_type(self) -> Optional[str]:
+        """
+        `'Homo'`, `'Hetero'` or `None` -- from the chains, not from the metadata.
+
+        `None` means at least one chain could not be resolved to a protein, which
+        is the local-file case; it is *not* the same as "the chains differ".
+        """
+        if not self.observed_composition:
+            return None
+        return "Homo" if self.n_distinct_proteins == 1 else "Hetero"
+
+    @property
+    def observed_state(self) -> Optional[str]:
+        """`'dimer'`, `'trimer'`, ... from the chain count, or `None` if unobserved."""
+        if not self.chains_observed:
+            return None
+        return _OLIGOMERIC_NAMES.get(self.n_chains, f"{self.n_chains}-mer")
+
+    @property
+    def assembly_type(self) -> Optional[str]:
+        """
+        The homo/hetero call, observation first.
+
+        The chains are what every score is actually computed from, so when the
+        two sources disagree the chains are what the notebook's *labels* follow.
+        The disagreement is never hidden: it is in `conflicts` and printed.
+
+        When the chains *are* observed but their proteins are not identifiable,
+        this is `None` rather than the declared value: an unverifiable claim is
+        downgraded to "dimer", not repeated as if the chains had confirmed it.
+        The declaration still appears verbatim in `declared_phrase`.
+        """
+        if self.observed_type:
+            return self.observed_type
+        if not self.chains_observed:
+            return self.declared_type
+        return None
+
+    @property
+    def noun(self) -> str:
+        """
+        What to call this thing: `'homodimer'`, `'heterodimer'`, `'monomer'`,
+        `'3-chain complex'`.
+
+        Example
+        -------
+        >>> base = dict(accession='AF-1', chains_observed=True)
+        >>> AssemblyDescription(chain_ids=('A',), **base).noun
+        'monomer'
+        >>> AssemblyDescription(chain_ids=('A', 'B'),
+        ...                     observed_composition=(('P1', 1), ('P2', 1)),
+        ...                     **base).noun
+        'heterodimer'
+        >>> AssemblyDescription(chain_ids=('A', 'B', 'C'), **base).noun
+        'trimer'
+        >>> AssemblyDescription(chain_ids=tuple('ABCDEFGHI'), **base).noun
+        '9-chain complex'
+        """
+        state = self.observed_state or self.declared_state
+        if not state and self.declared_is_complex is False:
+            # AFDB omits `oligomericState` entirely on single-chain entries, so
+            # `isComplex: false` is the only thing that says "monomer" there.
+            state = "monomer"
+        if not state:
+            return "complex of unknown size"
+        if state == "monomer":
+            return "monomer"
+        if state not in _OLIGOMERIC_NAMES.values():
+            return f"{self.n_chains}-chain complex"
+        kind = self.assembly_type
+        if kind in ("Homo", "Hetero"):
+            return f"{kind.lower()}{state}"
+        return state
+
+    @property
+    def composition_phrase(self) -> str:
+        """`'one protein in 2 copies: P0A6Q3 x2'`, or `'2 proteins: A x1 + B x1'`."""
+        if not self.observed_composition:
+            return "chain identities unknown"
+        listing = format_composition(self.observed_composition)
+        if self.n_chains == 1:
+            return listing
+        n = self.n_distinct_proteins
+        head = (f"one protein in {self.n_chains} copies" if n == 1
+                else f"{n} distinct proteins")
+        return f"{head}: {listing}"
+
+    @property
+    def headline(self) -> str:
+        """
+        The one-line answer to "what am I looking at?".
+
+        Example
+        -------
+        >>> hetero = AssemblyDescription(
+        ...     'AF-2', ('A', 'B'), {'A': 181, 'B': 101}, True,
+        ...     (('P63166', 1), ('Q96AZ6', 1)))
+        >>> hetero.headline
+        'Heterodimer -- 2 chains (A, B), 2 distinct proteins: P63166 x1 + Q96AZ6 x1'
+        """
+        line = self._headline_plain
+        if self.conflicts:
+            line += "  [!] the AFDB metadata disagrees -- see below"
+        return line
+
+    @property
+    def _headline_plain(self) -> str:
+        """`headline` without the "see below" flag, for contexts with no below."""
+        chains = ", ".join(self.chain_ids) or "none"
+        noun = self.noun[:1].upper() + self.noun[1:]
+        return (f"{noun} -- {self.n_chains} chain"
+                f"{'' if self.n_chains == 1 else 's'} ({chains}), "
+                f"{self.composition_phrase}")
+
+    @property
+    def declared_phrase(self) -> str:
+        """What the metadata asserts, verbatim, or why there is nothing to quote."""
+        if not self.metadata_present:
+            return "not fetched (local file mode)"
+        parts: List[str] = []
+        if self.declared_type:
+            parts.append(f"assemblyType={self.declared_type}")
+        if self.declared_state:
+            parts.append(f"oligomericState={self.declared_state}")
+        if self.declared_description:
+            parts.append(f"oligomericStateDescription={self.declared_description}")
+        if self.declared_is_complex is not None:
+            parts.append(f"isComplex={str(self.declared_is_complex).lower()}")
+        if self.declared_composition:
+            # Same members, same order on the page: when the declaration matches
+            # the chains, show it in the chains' order so the reader is not left
+            # comparing two differently-sorted lists of the same thing.
+            shown = self.declared_composition
+            if sorted(shown) == sorted(self.observed_composition):
+                shown = self.observed_composition
+            parts.append(f"complexComposition {format_composition(shown)}")
+        if not parts:
+            return "the endpoint asserted none of assemblyType, oligomericState, " \
+                   "complexComposition or isComplex"
+        return ", ".join(parts)
+
+    @property
+    def agreement_phrase(self) -> str:
+        """`'agrees with the chains'`, or the count of disagreements."""
+        if not self.metadata_present:
+            return ""
+        if self.conflicts:
+            n = len(self.conflicts)
+            return f"DISAGREES with the chains ({n} point{'' if n == 1 else 's'})"
+        if self.declared_type or self.declared_state or self.declared_composition:
+            return "agrees with the chains"
+        return ""
+
+    @property
+    def is_supported(self) -> bool:
+        """Whether `require_dimer` would pass."""
+        try:
+            self.require_dimer()
+        except UnsupportedAssemblyError:
+            return False
+        return True
+
+    def describe(self) -> str:
+        """
+        The multi-line assembly block for the metadata report.
+
+        Example
+        -------
+        >>> lying = AFDBPrediction('AF-3', (
+        ...     {'chainId': 'A', 'uniprotAccession': 'P0A6Q3',
+        ...      'assemblyType': 'Hetero', 'oligomericState': 'dimer'},
+        ...     {'chainId': 'B', 'uniprotAccession': 'P0A6Q3',
+        ...      'assemblyType': 'Hetero', 'oligomericState': 'dimer'}))
+        >>> block = describe_assembly(lying, {'A': 172, 'B': 172}).describe()
+        >>> print(block.splitlines()[0])
+        Assembly      : Homodimer -- 2 chains (A, B)
+        >>> flat = ' '.join(block.split())      # the block wraps; the text is one string
+        >>> 'DISAGREES with the chains (1 point)' in flat
+        True
+        >>> "AFDB says assemblyType 'Hetero'" in flat
+        True
+        >>> 'both chains resolve to the same protein, P0A6Q3 x2' in flat
+        True
+        """
+        chains = ", ".join(self.chain_ids) or "none"
+        noun = self.noun[:1].upper() + self.noun[1:]
+        # No "see below" flag here: unlike `headline`, this block is followed by
+        # the conflicts themselves, so pointing at them would be noise.
+        lines = _wrap_row(
+            "Assembly",
+            f"{noun} -- {self.n_chains} chain"
+            f"{'' if self.n_chains == 1 else 's'} ({chains})")
+        lines += _wrap_row("Composition", self.composition_phrase)
+        agreement = self.agreement_phrase
+        lines += _wrap_row(
+            "AFDB declares",
+            self.declared_phrase + (f" -- {agreement}" if agreement else ""))
+        for conflict in self.conflicts:
+            wrapped = textwrap.wrap(conflict, width=_ASSEMBLY_ROW_WIDTH - 6,
+                                    break_long_words=False,
+                                    break_on_hyphens=False)
+            lines.append(f"  [!] {wrapped[0]}")
+            lines += [f"      {piece}" for piece in wrapped[1:]]
+        return "\n".join(lines)
+
+    def require_dimer(self) -> "AssemblyDescription":
+        """
+        Return self, or refuse this input with a message a non-expert can act on.
+
+        Called twice on the online path, deliberately, at the two moments the two
+        kinds of evidence first exist:
+
+        1. straight after the metadata fetch, on the declaration alone. This
+           costs nothing and saves three downloads, but the declaration is not
+           authoritative about chain count -- the endpoint can describe fewer
+           chains than the structure has (R020) -- so it refuses only when the
+           declaration *and* the endpoint's own per-chain entry list agree that
+           this is not a two-chain complex. A declaration the entries
+           contradict is reported as a conflict, not acted on.
+        2. inside `verify_chain_identity`, on the observed chains. That one is
+           authoritative and always fires, online or in local-file mode.
+
+        Returns:
+            `self`, so it can be chained.
+
+        Raises:
+            UnsupportedAssemblyError: If this is not a two-chain complex.
+
+        Example
+        -------
+        >>> monomer = AFDBPrediction('AF-O15552-F1', (
+        ...     {'chainId': 'A', 'uniprotAccession': 'O15552', 'isComplex': False},))
+        >>> try:
+        ...     describe_assembly(monomer).require_dimer()
+        ... except UnsupportedAssemblyError as exc:
+        ...     print(str(exc).splitlines()[0])
+        AF-O15552-F1 is a monomer; this notebook analyses two-chain dimers only.
+
+        A declaration the endpoint's own entries contradict does not refuse
+        anything here -- two chain entries are two chains, whatever the label
+        says, and the structural gate will settle it:
+
+        >>> mislabelled = AFDBPrediction('AF-6', (
+        ...     {'chainId': 'A', 'uniprotAccession': 'P1',
+        ...      'oligomericState': 'trimer'},
+        ...     {'chainId': 'B', 'uniprotAccession': 'P2',
+        ...      'oligomericState': 'trimer'}))
+        >>> describe_assembly(mislabelled).require_dimer().declared_state
+        'trimer'
+
+        A dimer passes and hands itself back:
+
+        >>> ok = AFDBPrediction('AF-1', ({'chainId': 'A', 'uniprotAccession': 'P1'},
+        ...                              {'chainId': 'B', 'uniprotAccession': 'P1'}))
+        >>> describe_assembly(ok, {'A': 5, 'B': 5}).require_dimer().noun
+        'homodimer'
+        """
+        if self.chains_observed:
+            if self.n_chains == SUPPORTED_N_CHAINS:
+                return self
+            raise UnsupportedAssemblyError(self._refusal(observed=True))
+        # Metadata-only. Refuse solely when the declaration and the endpoint's
+        # own chain list *both* say this is not a dimer. A declaration that the
+        # entries themselves contradict -- `oligomericState: 'trimer'` on a
+        # record with two chain entries -- is exactly the disagreement this
+        # class exists to report, and refusing on it would be preferring the
+        # metadata over the model on evidence not yet gathered. Such a case
+        # falls through to the structural gate, which reads the real chains.
+        declared_non_dimer = (
+            self.declared_is_complex is False
+            or (self.declared_state is not None
+                and self.declared_state != SUPPORTED_OLIGOMERIC_STATE)
+        )
+        if declared_non_dimer and self.n_chains != SUPPORTED_N_CHAINS:
+            raise UnsupportedAssemblyError(self._refusal(observed=False))
+        return self
+
+    def _refusal(self, observed: bool) -> str:
+        """The refusal text: what was found, what is supported, why, what to do."""
+        if observed:
+            parts = [f"{cid} ({self.chain_lengths[cid]} residues)"
+                     if cid in self.chain_lengths else cid
+                     for cid in self.chain_ids]
+            chains = _wrap_inline(parts, indent=16) or "(none)"
+            found = (f"  found     : {self.n_chains} chain"
+                     f"{'' if self.n_chains == 1 else 's'} in the structure and the "
+                     f"PAE/pLDDT documents:\n"
+                     f"                {chains}\n"
+                     f"              {self._headline_plain}")
+        else:
+            described = ", ".join(self.chain_ids) or "(none)"
+            found = (f"  found     : the AFDB metadata declares "
+                     f"{self.declared_phrase},\n"
+                     f"              and describes {self.n_chains} chain"
+                     f"{'' if self.n_chains == 1 else 's'}: {described}")
+        if self.metadata_present and observed:
+            declared = textwrap.wrap(
+                f"AFDB metadata: {self.declared_phrase}", width=60,
+                break_long_words=False, break_on_hyphens=False)
+            found += "".join(f"\n              {piece}" for piece in declared)
+
+        if self.n_chains > SUPPORTED_N_CHAINS and observed:
+            why = (
+                "  why       : every score here is a property of one *ordered pair* of\n"
+                f"              chains. {self.n_chains} chains give "
+                f"{self.n_chains * (self.n_chains - 1)} ordered pairs and nothing in\n"
+                "              the input says which one you meant, so a single ipSAE or\n"
+                "              pDockQ for the whole assembly would be a claim about an\n"
+                "              object this notebook never examined.\n"
+                "  note      : AFDB itself contains no predictions with more than two\n"
+                "              chains -- every isComplex entry is oligomericState\n"
+                f"              '{SUPPORTED_OLIGOMERIC_STATE}' -- so this is almost "
+                "certainly a local mmCIF."
+            )
+            todo = (
+                "  what to do: extract the two chains you want to score into their own\n"
+                "              mmCIF and run that, or run the notebook once per pair.\n"
+                f"              A supported AFDB accession: {EXAMPLE_DIMER_ACCESSION}."
+            )
+        else:
+            why = (
+                "  why       : ipTM, ipSAE, pDockQ, pDockQ2 and LIS are all *inter-chain*\n"
+                "              measurements -- they read the PAE block between two\n"
+                "              different chains and the contacts across the interface.\n"
+                "              With one chain there is no such block and no interface,\n"
+                "              so there is no number to report, not even a bad one."
+            )
+            single = self.observed_composition or self.declared_composition
+            entry = single[0][0] if single else ""
+            todo = (
+                "  what to do: choose an AFDB *complex* accession. Every complex in AFDB\n"
+                "              is a dimer, and you can list some with:\n"
+                f"                {AFDB_DIMER_SEARCH}\n"
+                f"              A known-good homodimer: {EXAMPLE_DIMER_ACCESSION}."
+            )
+            if entry:
+                todo += (
+                    f"\n              For per-residue confidence of {entry} on its own, "
+                    "the AFDB\n"
+                    f"              entry page https://alphafold.ebi.ac.uk/entry/{entry} "
+                    "already shows\n"
+                    "              pLDDT and PAE; this notebook adds nothing for a "
+                    "single chain."
+                )
+        supported = (
+            f"  supported : exactly {SUPPORTED_N_CHAINS} chains "
+            f"(oligomericState '{SUPPORTED_OLIGOMERIC_STATE}'), homodimer or\n"
+            "              heterodimer alike."
+        )
+        headline = (
+            f"{self.accession} is a {self.noun}; this notebook analyses "
+            f"two-chain dimers only."
+        )
+        return "\n".join([headline, found, supported, why, todo])
+
+
+def describe_assembly(
+    prediction: Optional[AFDBPrediction] = None,
+    chain_lengths: Optional[Mapping[str, int]] = None,
+    labels: Optional[Mapping[str, "ChainLabel"]] = None,
+    accession: Optional[str] = None,
+) -> AssemblyDescription:
+    """
+    Reconcile what AFDB *says* the assembly is against what the chains *are*.
+
+    Reads the four assembly fields the notebook previously ignored --
+    `assemblyType`, `oligomericState`, `complexComposition` and `isComplex` --
+    and compares each against evidence derived independently from the chains:
+    their count, and the UniProt accession each resolves to. Every disagreement
+    becomes a sentence in `conflicts`; none of them is resolved silently, because
+    the two sources are independent and either can be the wrong one.
+
+    Args:
+        prediction:    Fetched metadata, or `None` in local-file mode.
+        chain_lengths: `{chain_id: n_residues}` observed in the structure / PAE.
+                       Omit it to describe the metadata alone, before download.
+        labels:        `{chain_id: ChainLabel}`, used to identify a chain's
+                       protein when the metadata does not describe that chain.
+        accession:     Overrides the accession in messages.
+
+    Returns:
+        An `AssemblyDescription`.
+
+    Example
+    -------
+    A heterodimer, agreeing:
+
+    >>> hetero = AFDBPrediction('AF-4', (
+    ...     {'chainId': 'A', 'uniprotAccession': 'Q96AZ6', 'assemblyType': 'Hetero',
+    ...      'oligomericState': 'dimer', 'isComplex': True,
+    ...      'complexComposition': [{'identifier': 'Q96AZ6', 'stoichiometry': 1},
+    ...                             {'identifier': 'P63166', 'stoichiometry': 1}]},
+    ...     {'chainId': 'B', 'uniprotAccession': 'P63166', 'assemblyType': 'Hetero',
+    ...      'oligomericState': 'dimer', 'isComplex': True,
+    ...      'complexComposition': [{'identifier': 'Q96AZ6', 'stoichiometry': 1},
+    ...                             {'identifier': 'P63166', 'stoichiometry': 1}]}))
+    >>> describe_assembly(hetero, {'A': 181, 'B': 101}).headline
+    'Heterodimer -- 2 chains (A, B), 2 distinct proteins: Q96AZ6 x1 + P63166 x1'
+
+    A stoichiometry that does not match the chains present:
+
+    >>> wrong = AFDBPrediction('AF-5', (
+    ...     {'chainId': 'A', 'uniprotAccession': 'P1', 'oligomericState': 'dimer',
+    ...      'complexComposition': [{'identifier': 'P1', 'stoichiometry': 4}]},
+    ...     {'chainId': 'B', 'uniprotAccession': 'P1', 'oligomericState': 'dimer',
+    ...      'complexComposition': [{'identifier': 'P1', 'stoichiometry': 4}]}))
+    >>> for conflict in describe_assembly(wrong, {'A': 5, 'B': 5}).conflicts:
+    ...     print(conflict)
+    AFDB says complexComposition 'P1 x4' but the chains present are 'P1 x2'. Only the chains in this model are analysed.
+
+    Without a structure it describes the metadata alone, and says so:
+
+    >>> describe_assembly(hetero).chains_observed
+    False
+    """
+    accession = str(
+        accession
+        or (prediction.accession if prediction is not None else "")
+        or "This model"
+    )
+
+    conflicts: List[str] = []
+
+    declared_type, note = _declared_field(prediction, "assemblyType")
+    if note:
+        conflicts.append(note)
+    declared_state, note = _declared_field(prediction, "oligomericState")
+    if note:
+        conflicts.append(note)
+    declared_description, note = _declared_field(
+        prediction, "oligomericStateDescription")
+    if note:
+        conflicts.append(note)
+    raw_composition, note = _declared_field(prediction, "complexComposition")
+    if note:
+        conflicts.append(note)
+    declared_is_complex, note = _declared_field(prediction, "isComplex")
+    if note:
+        conflicts.append(note)
+
+    declared_composition = _normalise_composition(raw_composition)
+
+    if chain_lengths is not None:
+        lengths = {str(cid): int(n) for cid, n in chain_lengths.items()}
+        chain_ids = tuple(sorted(lengths))
+        chains_observed = True
+    else:
+        lengths = {}
+        chain_ids = prediction.chain_ids if prediction is not None else ()
+        chains_observed = False
+
+    # Observed composition: what protein is each chain, from whichever source
+    # knows. Two rules keep this honest.
+    #
+    # 1. Every chain is keyed from the *same* namespace. Comparing one chain's
+    #    UniProt accession against another's protein name would make two copies
+    #    of one protein look like two different ones -- exactly the false
+    #    "Hetero" this function exists to catch.
+    # 2. Incomplete knowledge yields `()` rather than a guess, so "unknown"
+    #    never masquerades as "different".
+    def _key(chain_id: str, namespace: str) -> str:
+        if namespace == "uniprot":
+            if prediction is not None and prediction.describes_chain(chain_id):
+                value = prediction.chain_field(
+                    chain_id, "uniprotAccession", default="")
+                if value:
+                    return str(value)
+            if labels is not None and chain_id in labels and labels[chain_id].uniprot:
+                return str(labels[chain_id].uniprot)
+            return ""
+        if labels is not None and chain_id in labels:
+            label = labels[chain_id]
+            return str(label.gene or label.protein_name or label.entry_name or "")
+        return ""
+
+    # Ordered by first appearance in chain order, not alphabetically: chain
+    # order is already deterministic (chain ids are sorted), and a heterodimer
+    # reads far better when the protein named first is chain A's. Comparisons
+    # against the declared composition sort both sides, so the display order
+    # cannot create a spurious disagreement.
+    observed_composition: Tuple[Tuple[str, int], ...] = ()
+    for namespace in ("uniprot", "name"):
+        keys = [_key(chain_id, namespace) for chain_id in chain_ids]
+        if keys and all(keys):
+            counts: Dict[str, int] = {}
+            for key in keys:
+                counts[key] = counts.get(key, 0) + 1
+            observed_composition = tuple(counts.items())
+            break
+
+    description = AssemblyDescription(
+        accession=accession,
+        chain_ids=tuple(chain_ids),
+        chain_lengths=lengths,
+        chains_observed=chains_observed,
+        observed_composition=observed_composition,
+        declared_type=str(declared_type) if declared_type is not None else None,
+        declared_state=str(declared_state) if declared_state is not None else None,
+        declared_description=(str(declared_description)
+                              if declared_description is not None else None),
+        declared_composition=declared_composition,
+        declared_is_complex=(bool(declared_is_complex)
+                             if declared_is_complex is not None else None),
+        conflicts=(),
+        metadata_present=prediction is not None,
+    )
+
+    # --- reconciliation ----------------------------------------------------
+    observed_type = description.observed_type
+    if declared_type and observed_type and str(declared_type) != observed_type:
+        if observed_type == "Homo":
+            conflicts.append(
+                f"AFDB says assemblyType {str(declared_type)!r} (two different "
+                f"proteins) but both chains resolve to the same protein, "
+                f"{format_composition(observed_composition)}. The chains are what "
+                f"every score is computed from, so the labels above follow them; "
+                f"the metadata may be describing a different model, or may be wrong."
+            )
+        else:
+            conflicts.append(
+                f"AFDB says assemblyType {str(declared_type)!r} (one protein in "
+                f"several copies) but the chains resolve to different proteins, "
+                f"{format_composition(observed_composition)}. The chains are what "
+                f"every score is computed from, so the labels above follow them; "
+                f"the metadata may be describing a different model, or may be wrong."
+            )
+
+    observed_state = description.observed_state
+    if declared_state and observed_state and str(declared_state) != observed_state:
+        conflicts.append(
+            f"AFDB says oligomericState {str(declared_state)!r} but the structure "
+            f"and documents contain {description.n_chains} chain"
+            f"{'' if description.n_chains == 1 else 's'} "
+            f"({observed_state}). The chain count is taken from the files actually "
+            f"parsed."
+        )
+
+    if declared_composition and observed_composition and \
+            sorted(declared_composition) != sorted(observed_composition):
+        conflicts.append(
+            f"AFDB says complexComposition "
+            f"{format_composition(declared_composition)!r} but the chains present "
+            f"are {format_composition(observed_composition)!r}. Only the chains in "
+            f"this model are analysed."
+        )
+
+    if declared_is_complex is not None and chains_observed:
+        if not declared_is_complex and description.n_chains > 1:
+            conflicts.append(
+                f"AFDB says isComplex=false but the structure has "
+                f"{description.n_chains} chains."
+            )
+        if declared_is_complex and description.n_chains < 2:
+            conflicts.append(
+                f"AFDB says isComplex=true but the structure has only "
+                f"{description.n_chains} chain."
+            )
+
+    return replace(description, conflicts=tuple(conflicts))
 
 
 # --- metadata reporting (R020) ---------------------------------------------
@@ -640,6 +1579,8 @@ def format_metadata_report(
     chain_lengths: Mapping[str, int],
     accession: Optional[str] = None,
     width: int = _REPORT_WIDTH,
+    assembly: Optional[AssemblyDescription] = None,
+    labels: Optional[Mapping[str, "ChainLabel"]] = None,
 ) -> str:
     """
     Render the complex's metadata, with every identity field attributed to a chain.
@@ -660,6 +1601,11 @@ def format_metadata_report(
                        order the chains should be reported.
         accession:     Overrides the accession line; defaults to the prediction's.
         width:         Rule width.
+        assembly:      A pre-computed `AssemblyDescription`, so that the report
+                       and the check that let the notebook get this far cannot
+                       drift apart. Computed here when omitted.
+        labels:        `{chain_id: ChainLabel}`, used only to identify a chain's
+                       protein when the metadata does not describe it.
 
     Returns:
         The report as a newline-joined string, with no trailing newline.
@@ -694,6 +1640,23 @@ def format_metadata_report(
     >>> [line for line in format_metadata_report(partial, {'A': 10, 'B': 10}).splitlines()
     ...  if 'no AFDB' in line]
     ['  no AFDB metadata entry for this chain (endpoint described: A)']
+
+    The assembly is stated in the reader's words, from both kinds of evidence
+    (R023). What AFDB declares is printed beside what the chains show, so the two
+    can be compared instead of one being quietly preferred:
+
+    >>> for line in format_metadata_report(homo, {'A': 172, 'B': 172}).splitlines()[4:7]:
+    ...     print(line)
+    Assembly      : Homodimer -- 2 chains (A, B)
+    Composition   : one protein in 2 copies: P0A6Q3 x2
+    AFDB declares : the endpoint asserted none of assemblyType, oligomericState,
+
+    With a chain the endpoint never described, the homo/hetero call is downgraded
+    rather than asserted from metadata the chains could not confirm:
+
+    >>> [line for line in format_metadata_report(partial, {'A': 10, 'B': 10}).splitlines()
+    ...  if line.startswith(('Assembly', 'Composition'))]
+    ['Assembly      : Dimer -- 2 chains (A, B)', 'Composition   : chain identities unknown']
     """
     lengths = {str(chain_id): int(n) for chain_id, n in chain_lengths.items()}
     chain_ids = list(lengths)
@@ -719,33 +1682,22 @@ def format_metadata_report(
             else:
                 groups.append((identity, [chain_id]))
 
+    # The assembly is stated from *both* kinds of evidence -- what AFDB declares
+    # and what the chains are -- and any disagreement between them is printed
+    # rather than resolved out of sight (R023).
+    if assembly is None:
+        assembly = describe_assembly(prediction, lengths, labels=labels,
+                                     accession=accession)
     if prediction is None:
-        assembly = "not fetched (local file mode)"
         version = "not fetched (local file mode)"
     else:
-        kind = prediction.shared_field("assemblyType", default=None)
-        if kind is None:
-            # Derivable from the identity grouping when the endpoint omits it --
-            # but only when every chain was actually described.
-            if undescribed or not groups:
-                kind = "Unknown"
-            else:
-                kind = "Homo" if len(groups) == 1 else "Hetero"
-        state = prediction.shared_field("oligomericState", default=None)
-        distinct = len(groups)
-        described = f", {len(chain_ids) - len(undescribed)} described" if undescribed else ""
-        assembly = (
-            f"{kind}{' ' + str(state) if state else ''} "
-            f"({len(chain_ids)} chains{described}, {distinct} distinct "
-            f"protein{'' if distinct == 1 else 's'})"
-        )
         version = str(prediction.shared_field("modelVersion", "latestVersion",
                                               default="N/A"))
 
     lines: List[str] = ["=" * width, "COMPLEX METADATA REPORT", "=" * width]
     lines.append(row("Accession", str(
         accession or (prediction.accession if prediction is not None else "N/A"))))
-    lines.append(row("Assembly", assembly))
+    lines.extend(assembly.describe().splitlines())
     lines.append(row("Model version", version))
     lines.append(row("Total length", f"{sum(lengths.values())} residues ("
                      + ", ".join(f"{c}: {lengths[c]}" for c in chain_ids) + ")"))
@@ -1777,11 +2729,17 @@ class ChainIdentity:
                  a protein name the two documents disagree about. Worth printing;
                  not worth refusing to run over, because none of them can
                  misalign a slice.
+        assembly: What this complex is (R023), reconciled from the AFDB
+                 declaration and the chains themselves. `None` only when a
+                 caller constructs a `ChainIdentity` by hand;
+                 `verify_chain_identity` always fills it, and always after
+                 `AssemblyDescription.require_dimer` has passed.
     """
 
     lengths: Dict[str, int]
     labels: Dict[str, ChainLabel]
     notes: Tuple[str, ...] = ()
+    assembly: Optional[AssemblyDescription] = None
 
     @property
     def chain_ids(self) -> Tuple[str, ...]:
@@ -1848,6 +2806,7 @@ def verify_chain_identity(
     pae: PAEMatrix,
     plddt: Optional[PLDDTScores] = None,
     prediction: Optional[AFDBPrediction] = None,
+    require_dimer: bool = True,
 ) -> ChainIdentity:
     """
     Reconcile the three chain-describing sources, then build a label per chain.
@@ -1873,14 +2832,22 @@ def verify_chain_identity(
                     the UniProt accession and the entry name; without it the
                     labels fall back to the documents' own `name` field, and
                     then to the bare chain id.
+        require_dimer: Enforce the notebook's dimer scope (D4) here, rather
+                    than leaving it to be discovered eight cells later as an
+                    `IndexError` on `chain_ids[1]`. Pass `False` to describe the
+                    assembly without restricting it.
 
     Returns:
-        A `ChainIdentity` carrying the agreed lengths, one `ChainLabel` per chain
-        and any non-fatal notes.
+        A `ChainIdentity` carrying the agreed lengths, one `ChainLabel` per chain,
+        any non-fatal notes, and the reconciled `AssemblyDescription`.
 
     Raises:
         ValueError: If the chain sets or the chain lengths disagree between any
             two of the three sources.
+        UnsupportedAssemblyError: If `require_dimer` and this is not a
+            two-chain complex. This is the gate that cannot be skipped: every
+            cell downstream consumes this function's return value, so there is
+            no path to a score that does not pass through it.
 
     Example
     -------
@@ -1914,6 +2881,22 @@ def verify_chain_identity(
     >>> partial = AFDBPrediction('AF-2', ({'chainId': 'A', 'gene': 'alp'},))
     >>> verify_chain_identity(chains, pae, prediction=partial).notes
     ('Chain B: the AFDB metadata describes no such chain (it described: A); labelling it from the PAE/pLDDT documents alone.',)
+
+    The assembly comes back with the identity, reconciled and already checked:
+
+    >>> verify_chain_identity(chains, pae, prediction=pred).assembly.noun
+    'heterodimer'
+
+    A single-chain model is refused here, not eight cells later on an index that
+    does not exist:
+
+    >>> solo_pae = PAEMatrix(np.zeros((2, 2), dtype=np.float32), 30.0,
+    ...                      (ChainSpan('A', 1, 2),))
+    >>> try:
+    ...     verify_chain_identity({'A': chains['A']}, solo_pae)
+    ... except UnsupportedAssemblyError as exc:
+    ...     print(str(exc).splitlines()[0])
+    This model is a monomer; this notebook analyses two-chain dimers only.
     """
     lengths = verify_chain_lengths(chains, pae)
     if plddt is not None:
@@ -1975,7 +2958,18 @@ def verify_chain_identity(
                 f"{', '.join(extra)}. They are not analysed."
             )
 
-    return ChainIdentity(lengths=lengths, labels=labels, notes=tuple(notes))
+    # What is this thing? Answered from the chains just verified *and* from the
+    # AFDB declaration, with any disagreement recorded rather than resolved
+    # (R023). The scope check goes here, after the length checks and before any
+    # caller can reach a score, because this is the one call every downstream
+    # cell depends on: a monomer or a three-chain model is refused with an
+    # explanation instead of an `IndexError` on `chain_ids[1]`.
+    assembly = describe_assembly(prediction, lengths, labels=labels)
+    if require_dimer:
+        assembly.require_dimer()
+
+    return ChainIdentity(lengths=lengths, labels=labels, notes=tuple(notes),
+                         assembly=assembly)
 
 
 # ---------------------------------------------------------------------------

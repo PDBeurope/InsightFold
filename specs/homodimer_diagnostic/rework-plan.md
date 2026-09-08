@@ -738,7 +738,7 @@ PAE-derived `nA` / `nB`, and fail loudly rather than silently mis-slicing.
 - Cell 27 and 28: the diagnostic prose says "the two chains" and "identical copies" in places
   that are false for a heterodimer.
 
-### `[ ] R023 — Detect and display the assembly type`
+### `[x] R023 — Detect and display the assembly type` — DONE 2026-09-08
 
 **What.** Read `assemblyType`, `oligomericState`, and `complexComposition` from the metadata
 and state plainly at the top of the report whether this is a homodimer or a heterodimer.
@@ -895,6 +895,45 @@ Axis labels stay correct, so nothing is false. Two of the three sites are alread
 (R050 for the PAE heatmap, R052 item 4 for the mask panel). **The third, the contact map's
 left panel, is owned by no task — fold it into R050.** Fixing it needs a figure-size change,
 which R022 was forbidden from making.
+
+
+**R023 outcome, 2026-09-08.**
+
+**Measured fact worth keeping: every AFDB complex is a dimer.** Verified independently on the
+search endpoint — `isComplex:true` and `oligomericState:dimer` both return **2,010,763**;
+`trimer` and `tetramer` return nothing. Homo 1,930,523 + Hetero 80,240 sums exactly. So >2
+chains is reachable only through a local mmCIF, which scopes D4's future N-chain work: it is a
+local-file feature, not an AFDB one. R093 should record this in `CLAUDE.md`.
+
+**Three failure gates, each where its evidence first exists.**
+1. `fetch_afdb_metadata` raises `AccessionLookupError`, distinguishing malformed (HTTP 400,
+   quoting the service's own message) from absent (404).
+2. A cheap metadata gate in cell 6, before three downloads. Deliberately **not** authoritative:
+   it refuses only when the declaration *and* the endpoint's own per-chain entry list agree.
+   A declared `trimer` on a two-entry record is exactly the disagreement this task surfaces, so
+   refusing on it would prefer metadata over the model on evidence not yet gathered.
+3. The structural gate inside `verify_chain_identity`, which always fires, online or local.
+
+The agent rejected a standalone `validate_input()` the notebook calls, on the grounds that for
+a non-expert hitting Run All a check that can be skipped is a check that will be.
+`verify_chain_identity` is the one call every downstream cell already depends on, so there is
+no path to a score that bypasses it.
+
+**Disagreement is shown, not resolved silently.** Both sources print, and the rule for labels
+("the chains win, because that is what the scores are computed from") is stated inside the
+conflict text. When chains are present but unidentifiable, the homo/hetero call is downgraded
+to plain `Dimer` rather than repeating an unverifiable declaration.
+
+**Namespace hazard fixed that R020 did not have:** chain identity keys now come from one
+namespace for all chains, never mixed. Mixing would make two copies of one protein look like
+two proteins, manufacturing the exact false "Hetero" this task exists to catch.
+
+**Corrects a stale `CLAUDE.md` edge case.** Its table says a monomer accession "produces
+zero-length chain B; scores will be 0.0 (no informative error)". Wrong before and after: the
+real pre-fix behaviour was a bare `IndexError` at `pae.chain_ids[1]`. Now it is
+`UnsupportedAssemblyError` at cell 6, before any download. Added to R093.
+
+232 doctests pass, up from 191. All three fixtures execute end to end with scores unchanged.
 
 ## W3 — Section 2, Interface Detection
 
@@ -1246,7 +1285,7 @@ review.
 |---|-----------|-------|---|--------|
 | M1 | Ground truth | R001, R002, R002b, R009 | 4 | R002b added 2026-09-08 |
 | M2 | Module extracted; notebook shrunk 54% | R010, R010b, R011-R016 | 8 | **COMPLETE** 2026-09-08 |
-| M3 | Heterodimer support | R020-R025 | 6 | R020, R021, R022 done |
+| M3 | Heterodimer support | R020-R025 | 6 | R020-R023 done |
 | M4 | Scoring correctness + Section 4 | R003-R008, R060-R062 | 9 | R003, R005, R006, R007 landed early in R012 |
 | M5 | PAE visuals | R050-R052 | 3 | |
 | M6 | 3D views | R070-R075, R030 | 7 | |
