@@ -91,10 +91,11 @@ its traffic light and the AFDB joint criterion, and the six matplotlib figures
 (R013), and the four MolViewSpec 3D views with their shared display helper
 (R014). Nothing is now left unimplemented.
 
-The plotting section is a behaviour-preserving move of the notebook's inline
-figures, not a redesign: the sizing (R050), the palette (R051) and the
-score-mask panel (R052) are corrected later, and `PAE_CMAP` is the seam R051
-changes.
+The plotting section began as a behaviour-preserving move of the notebook's
+inline figures (R013) and has since taken milestone M5: figure sizing and true
+aspect ratios (R050), a sequential green default with switchable alternatives
+through the `PAE_CMAP` seam (R051), and the rebuilt score-mask panel with its
+shared colour bar and stated quadrant provenance (R052).
 
 The MolViewSpec section is likewise a behaviour-preserving move: R070-R075 and
 R030 redesign the views, and the four defects R075 lists that change no pixel
@@ -115,12 +116,14 @@ from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple
 
 import matplotlib
 import matplotlib.patches as mpatches
+import matplotlib.patheffects as mpatheffects
 import matplotlib.pyplot as plt
 import numpy as np
 import requests
 import seaborn as sns
 from matplotlib.colors import Colormap
 from matplotlib.figure import Figure
+from matplotlib.ticker import MaxNLocator
 
 __all__ = [
     # constants
@@ -5694,23 +5697,37 @@ def afdb_high_confidence(ipsae_d0res: float, pdockq2: float) -> AFDBHighConfiden
 # -------------------
 # `PAE_CMAP` is the single module-level name every PAE figure resolves through,
 # at call time rather than at definition time, and every such function also takes
-# a `cmap=` override. R051 -- "green default palette with a switchable
-# alternative" -- is therefore a change of *this default*, not a rewrite of the
-# functions below. The default is `'RdBu_r'` today only because that is what the
-# notebook draws; R051 flips it to a sequential green with dark = low PAE =
-# confident, and `PAE_CMAP_CHOICES` is where the candidates are named.
+# a `cmap=` override. Changing the palette for the whole notebook is therefore
+# one assignment -- `ciu.PAE_CMAP = 'colourblind_safe'` -- and not a rewrite of
+# the functions below. `PAE_CMAP_CHOICES` names the alternatives.
 #
-# What this section deliberately does NOT do
-# ------------------------------------------
-# R013 is a behaviour-preserving move. The sizing (R050), the palette (R051) and
-# the score-mask panel's aspect ratio and shared colour bar (R052) are all known
-# defects, and all three are left exactly as the notebook draws them today: the
-# scoring code could be corrected early because `ipsae.py` is an objective
-# oracle, but a figure has no oracle, so a visual change landed here would be
-# indistinguishable from a regression. Specifically preserved on purpose:
-# `aspect='auto'` everywhere, `figsize=(10, 9)` for the full PAE matrix, and
-# `fig.colorbar(im, ax=axes[-1])` in the 2x2 panel, which steals width from the
-# fourth axis alone and is why that panel renders narrower than the other three.
+# Milestone M5, landed
+# --------------------
+# R013 moved these figures out of the notebook without changing a pixel, and
+# left three known defects for M5 to fix. All three are now fixed here:
+#
+# * **R050, size and aspect.** `figsize=(10, 9)` at `figure.dpi = 150` made the
+#   full PAE matrix 1500x1350 px, which overflows a notebook output area and is
+#   what put a scrollbar around it. It is now `PAE_MATRIX_FIGSIZE`, 900x810 px.
+#   Every PAE and contact image also draws with `aspect='equal'` instead of
+#   `'auto'`, so one residue is one square and a 563x69 block reads as 8.16:1
+#   rather than being stretched to the axes box. Both the contact map and the
+#   score-mask panel size themselves *from* the block's aspect ratio, because an
+#   equal-aspect image in a fixed box is either a sliver or a sea of white.
+# * **R051, palette.** The default is a sequential green with dark = low PAE =
+#   confident. See `PAE_CMAP`.
+# * **R052, the score-mask panel.** One shared colour bar across all four axes
+#   instead of one stolen from the fourth; a locator strip that says in words and
+#   in a diagram which quadrant of the full matrix is being shown; and a hatched
+#   slate underlay for "not used by this score" that stays separable from a green
+#   ramp whose pale end is nearly white. See `plot_pae_score_masks`.
+#
+# Ink on a pale ramp
+# ------------------
+# `RdBu_r` was dark at *both* ends, so white annotation lines and white quadrant
+# labels were legible wherever they landed. A sequential ramp is pale at one end,
+# so every annotation drawn on top of PAE data now carries a contrasting stroke
+# (`_haloed`) rather than relying on the map being dark.
 
 
 NOTEBOOK_RC_PARAMS: Dict[str, Any] = {
@@ -5773,31 +5790,87 @@ PLDDT_BAND_COLOURS: Tuple[str, ...] = tuple(colour for _, colour, _ in PLDDT_BAN
 
 # -- colormaps --------------------------------------------------------------
 
-PAE_CMAP: str = "RdBu_r"
-"""Default colormap for every PAE figure. **This is the R051 seam.**
+PAE_CMAP: str = "Greens_r"
+"""Default colormap for every PAE figure. **This is the palette seam (R051).**
 
-Resolved at call time by `resolve_pae_cmap`, so reassigning
-`complex_interface_utils.PAE_CMAP` retunes every PAE figure at once, and R051
-becomes a one-line change of this default plus the accompanying prose.
+Resolved at call time by `resolve_pae_cmap`, so assigning
+`complex_interface_utils.PAE_CMAP = 'colourblind_safe'` -- one line, in the
+notebook's user-input cell -- retunes every PAE figure at once.
 
-`'RdBu_r'` is a diverging map (0 = dark blue, mid = white, max = dark red) and is
-kept only because it is what the notebook draws today. R051 replaces it with a
-sequential green in which *dark* = low PAE = confident, so that confident regions
-stay legible against a white background; see `PAE_CMAP_CHOICES`.
+Why `'Greens_r'`
+----------------
+It is sequential, single-hue, and **dark at PAE 0**: the cells AlphaFold is
+confident about are the ones that carry ink, and "no idea" fades toward the page
+instead of shouting in red. That orientation is the requirement, not a
+preference -- a pale low-PAE end would put the informative half of the figure at
+1.0:1 against a white background.
+
+Its lightness decreases monotonically along the whole ramp under normal vision
+*and* under simulated deuteranopia and protanopia (Machado-Oliveira-Fernandes
+2009, severity 1.0), which is what makes a single-hue ramp safe: the reader is
+following lightness, and lightness is the channel that survives colour-vision
+deficiency. `'colourblind_safe'` is offered anyway, for readers who would rather
+not depend on that.
+
+The trade-off this ramp accepts is at the *pale* end: `Greens_r` reaches
+`#f7fcf5`, 1.01:1 against white, so a high-PAE cell has almost no contrast with
+the page. For a discrete mark that would be disqualifying. For a contiguous
+heatmap it is the domain convention (AlphaFold's own PAE viewers all fade to
+near-background at the uncertain end) and it is deliberate: uncertainty should
+recede. The figures compensate structurally rather than by truncating the ramp
+-- the axes frame stays drawn, so the block's extent is always visible, and the
+"not used" underlay is a hatched slate rather than a grey that would collide
+with the pale end.
 """
 
 PAE_CMAP_CHOICES: Dict[str, str] = {
-    "rdbu": "RdBu_r",
     "green": "Greens_r",
-    "colourblind_safe": "viridis_r",
+    "colourblind_safe": "viridis",
+    "rdbu": "RdBu_r",
 }
 """Named shorthands accepted anywhere a PAE colormap is taken.
 
-Candidates for R051, which owns the final choice: `'green'` is the AFDB-style
-sequential green with dark = low PAE, and `'colourblind_safe'` is the
-perceptually uniform alternative for readers who cannot separate the green ramp.
-`'rdbu'` is the current default, retained for continuity.
+`'green'`
+    The default. Sequential, dark = low PAE = confident.
+`'colourblind_safe'`
+    `viridis`, perceptually uniform and multi-hue, with the largest
+    step-to-step separation of the three under both simulated deuteranopia and
+    protanopia. Note the name is `viridis`, **not** `viridis_r`: `viridis_r`
+    puts bright yellow at PAE 0, which inverts the dark = confident rule this
+    module depends on, and is the orientation bug this entry used to carry.
+`'rdbu'`
+    The pre-M5 default, kept so an older figure can be reproduced. It is
+    *diverging*, and PAE is not a diverging quantity: its white midpoint falls
+    at an arbitrary PAE (half of `max_pae`), and its lightness is non-monotone,
+    so PAE 3 and PAE 28 render at nearly the same lightness -- which under
+    deuteranopia or protanopia, where the red and blue arms converge, makes a
+    confident cell and a hopeless one genuinely hard to tell apart. Not
+    recommended; retained for continuity only.
 """
+
+PAE_UNUSED_COLOUR: str = "#90A4AE"
+"""Fill for cells a score does not read, in `plot_pae_score_masks`.
+
+A slate that has to stay separable from *every* step of the PAE ramp, which is
+harder than it sounds: a single-hue ramp spans the full lightness range, so a
+neutral of any lightness collides with some step of it. This one is chosen by
+search to maximise the worst-case OKLab separation against `Greens_r` under
+simulated colour-vision deficiency -- minimum dE 14.0 normal, 9.1 deuteranopia,
+11.0 protanopia, all above the 8.0 target -- while keeping OKLab chroma at 0.027,
+low enough that it still reads as grey rather than as a fifth series colour.
+
+Against the non-default ramps the colour alone is weaker (viridis: 6.0
+deuteranopia; RdBu_r: 4.8 protanopia), which is why `PAE_UNUSED_HATCH` exists:
+texture is the one channel that does not depend on which palette is selected.
+"""
+
+PAE_UNUSED_HATCH: str = "///"
+"""Hatch drawn over `PAE_UNUSED_COLOUR`, so "not used" is carried by texture as
+well as by colour and survives a palette switch, a monochrome print, and
+tritanopia (where the slate's separation from `Greens_r` drops to 6.5)."""
+
+PAE_UNUSED_HATCH_COLOUR: str = "#FFFFFF"
+"""Hatch line colour for `PAE_UNUSED_HATCH`."""
 
 DIST_CMAP: str = "viridis_r"
 """Colormap for the contact map, which shows *distance*, not PAE, and so is not
@@ -5832,6 +5905,150 @@ independent scores. The other two ipSAE variants are excluded because
 guaranteed agreements as if they were three confirmations."""
 
 
+# -- figure geometry (R050) -------------------------------------------------
+# Every figure here is drawn at `figure.dpi = 150`, so an inch of figure is 150
+# rendered pixels and the sizes below are chosen in pixels first. The target is
+# that a figure fits a notebook output area -- roughly 900 px of usable width in
+# Colab and in a default JupyterLab window -- without the browser having to
+# scroll it or shrink it so far that the axis labels stop being readable.
+#
+# The two block figures cannot take a fixed size, because with `aspect='equal'`
+# the *data* dictates the shape of the image: the four project fixtures span
+# 1:1, 1.79:1, 8.16:1 and 1:7.11. A fixed box would give the extreme cases a
+# sliver of image in a field of white. So they size themselves from the block's
+# aspect ratio via `_block_panel_size`, and the score-mask panel additionally
+# picks its grid from it via `_mask_panel_grid`.
+
+PAE_MATRIX_FIGSIZE: Tuple[float, float] = (6.0, 5.4)
+"""Figure size for `plot_pae_matrix`, in inches: 900x810 px at
+`figure.dpi = 150`. The PAE matrix is always square, so this one *can* be fixed.
+Was `(10, 9)` -- 1500x1350 px -- which is what made the notebook scroll it."""
+
+CONTACT_MAP_PANEL_IN: float = 3.4
+"""Longest side, in inches, of the contact-map image in
+`plot_interface_contact_map`. The short side follows from the block's aspect."""
+
+CONTACT_MAP_COVERAGE_IN: float = 4.4
+"""Width, in inches, of the interface-coverage panel beside the contact map.
+Fixed: its content is one residue axis, whose readable width does not depend on
+the contact block's shape."""
+
+MASK_PANEL_MAX_IN: float = 2.0
+"""Longest side, in inches, of one score-mask panel in the 2x2 layout."""
+
+MASK_PANEL_STRIP_IN: float = 3.0
+"""Longest side, in inches, of one score-mask panel in the 1x4 and 4x1 layouts.
+
+Larger than `MASK_PANEL_MAX_IN` because a single row or column spends the space
+in one direction only, so the panels can be longer without the figure growing in
+the direction that would put a scrollbar back."""
+
+MASK_STRIP_MIN_WIDTH_IN: float = 5.6
+"""Floor on the score-mask figure's width, in inches.
+
+The provenance strip has a fixed amount to say, and a 4x1 layout of very wide
+blocks would otherwise produce a figure too narrow to say it in. The strip text
+is wrapped to whatever width results."""
+
+MASK_LOCATOR_STRIP_IN: float = 1.25
+"""Height, in inches, of the provenance strip above the score-mask panels: the
+quadrant locator diagram and the sentence that says which block is drawn."""
+
+MASK_LAYOUT_TALL_RATIO: float = 2.0
+"""At or above this rows:cols ratio the four score-mask panels are laid out in a
+single row. Four tall-narrow blocks side by side use the space a 2x2 would
+waste, and keep the figure short enough not to need scrolling."""
+
+MASK_LAYOUT_WIDE_RATIO: float = 0.5
+"""At or below this rows:cols ratio the four panels are stacked in a single
+column -- the user's own fallback, and the right answer for a wide-short block
+such as the 108x768 fixture."""
+
+
+def _block_panel_size(
+    n_rows: int,
+    n_cols: int,
+    longest: float,
+    min_width: float,
+    min_height: float,
+) -> Tuple[float, float]:
+    """
+    Inches for an axes box that shows an `n_rows` x `n_cols` block at true aspect.
+
+    The longer side of the block gets `longest` inches and the shorter side
+    follows from the ratio, so the box is the shape of the data. The two minima
+    are not aspect corrections -- an `aspect='equal'` image never fills a box
+    wider than itself -- they only reserve room for tick labels and an axis
+    title, which a 0.2 inch wide panel would have nowhere to put.
+
+    Args:
+        n_rows:     Block rows (the vertical extent).
+        n_cols:     Block columns (the horizontal extent).
+        longest:    Inches for the longer side.
+        min_width:  Floor on the returned width.
+        min_height: Floor on the returned height.
+
+    Returns:
+        `(width_in, height_in)`.
+
+    Example
+    -------
+    >>> _block_panel_size(172, 172, 3.0, 0.1, 0.1)
+    (3.0, 3.0)
+    >>> w, h = _block_panel_size(563, 69, 3.0, 0.1, 0.1)
+    >>> round(h / w, 2), h
+    (8.16, 3.0)
+    >>> w, h = _block_panel_size(108, 768, 3.0, 0.1, 0.1)
+    >>> round(w / h, 2), w
+    (7.11, 3.0)
+    >>> _block_panel_size(563, 69, 3.0, 1.0, 1.0)   # floors reserve label room
+    (1.0, 3.0)
+    """
+    ratio = n_rows / n_cols
+    if ratio >= 1.0:
+        height = longest
+        width = longest / ratio
+    else:
+        width = longest
+        height = longest * ratio
+    return max(width, min_width), max(height, min_height)
+
+
+def _mask_panel_grid(n_rows: int, n_cols: int) -> Tuple[int, int]:
+    """
+    `(nrows, ncols)` of the score-mask grid for a block of this shape.
+
+    A 2x2 is right for a squarish block and wrong for an extreme one: four
+    8.16:1 slivers in a 2x2 leave two columns of white, and four 1:7.11 ribbons
+    leave two rows of it. So the grid follows the block.
+
+    Example
+    -------
+    >>> _mask_panel_grid(172, 172), _mask_panel_grid(181, 101)
+    ((2, 2), (2, 2))
+    >>> _mask_panel_grid(563, 69), _mask_panel_grid(108, 768)
+    ((1, 4), (4, 1))
+    """
+    ratio = n_rows / n_cols
+    if ratio >= MASK_LAYOUT_TALL_RATIO:
+        return 1, 4
+    if ratio <= MASK_LAYOUT_WIDE_RATIO:
+        return 4, 1
+    return 2, 2
+
+
+def _haloed(foreground: str = "white", linewidth: float = 2.4) -> List[Any]:
+    """
+    Path effects that keep an annotation readable on any step of a PAE ramp.
+
+    `RdBu_r` was dark at both ends, so plain white annotations worked. A
+    sequential ramp is pale at one end and dark at the other, so anything drawn
+    on top of PAE data needs a contrasting outline instead of a single colour
+    chosen for one end of the map.
+    """
+    return [mpatheffects.withStroke(linewidth=linewidth, foreground=foreground)]
+
+
 def apply_plot_style(overrides: Optional[Mapping[str, Any]] = None) -> None:
     """
     Apply the notebook's seaborn style and `rcParams` to the global pyplot state.
@@ -5845,9 +6062,10 @@ def apply_plot_style(overrides: Optional[Mapping[str, Any]] = None) -> None:
         overrides: Extra `rcParams` applied after `NOTEBOOK_RC_PARAMS`.
 
     Note:
-        `figure.dpi` is 150 here, which is what makes the 10x9 inch PAE figure
-        1500x1350 px and triggers the notebook's in-cell scrollbar. R050 fixes
-        that by resizing the figure, not by lowering this.
+        `figure.dpi` is 150 here, so one figure inch is 150 rendered pixels.
+        R050 sized every figure against that, rather than lowering it: dropping
+        the dpi would have shrunk the text along with the figure, and the point
+        was to keep the labels readable while the image fits the output area.
     """
     sns.set_style("white")
     plt.rcParams.update(NOTEBOOK_RC_PARAMS)
@@ -5861,8 +6079,8 @@ def resolve_pae_cmap(cmap: Optional[str | Colormap] = None) -> Colormap:
 
     The lookup order is: the explicit argument, then the module-level `PAE_CMAP`
     read *now* rather than captured at definition time. That late read is the
-    whole point of the seam -- it is what lets R051 change one name and retune
-    every PAE figure.
+    whole point of the seam -- it is what lets the notebook's user-input cell
+    assign `ciu.PAE_CMAP` once and retune every PAE figure drawn afterwards.
 
     Args:
         cmap: A `Colormap`, a key of `PAE_CMAP_CHOICES`, a matplotlib colormap
@@ -5877,11 +6095,13 @@ def resolve_pae_cmap(cmap: Optional[str | Colormap] = None) -> Colormap:
     Example
     -------
     >>> resolve_pae_cmap().name
-    'RdBu_r'
-    >>> resolve_pae_cmap('green').name
     'Greens_r'
-    >>> resolve_pae_cmap('viridis').name
+    >>> resolve_pae_cmap('colourblind_safe').name
     'viridis'
+    >>> resolve_pae_cmap('rdbu').name
+    'RdBu_r'
+    >>> resolve_pae_cmap('magma').name
+    'magma'
     """
     requested = PAE_CMAP if cmap is None else cmap
     if isinstance(requested, Colormap):
@@ -6002,7 +6222,7 @@ def plot_interface_contact_map(
     label_x: "Optional[str | ChainLabel]" = None,
     label_y: "Optional[str | ChainLabel]" = None,
     cmap: str | Colormap = DIST_CMAP,
-    figsize: Tuple[float, float] = (14.0, 6.0),
+    figsize: Optional[Tuple[float, float]] = None,
 ) -> Figure:
     """
     The interface: a distance-coloured contact map beside per-chain coverage bars.
@@ -6020,13 +6240,21 @@ def plot_interface_contact_map(
     with the residue it ends at, and each track's residue count is in its tick
     label, so a shorter chain reads as shorter rather than as truncated (R022).
 
+    The contact panel is drawn at `aspect='equal'`, so one residue is one square
+    and the panel is literally the shape of the contact block (R050). That makes
+    the figure's own width depend on the data: a 563x69 block is a narrow strip
+    and a 108x768 block is a wide ribbon, and a fixed figure size would give one
+    of them a sliver of image in a field of white. `figsize=None` therefore
+    computes the size from the block; pass a tuple to override.
+
     Args:
         contacts: Interface contacts of one ordered chain pair.
         label_x:  Display name for `chain_x`; defaults to `'Chain <id>'`.
         label_y:  Display name for `chain_y`.
         cmap:     Colormap for the distance panel. Not `PAE_CMAP`: this panel
                   shows distance, and the two must stay visually distinct.
-        figsize:  Figure size in inches.
+        figsize:  Figure size in inches, or `None` to size it from the block's
+                  aspect ratio.
 
     Returns:
         The `Figure`. Nothing is shown or saved; the caller decides.
@@ -6035,18 +6263,42 @@ def plot_interface_contact_map(
     name_y = _chain_label(contacts.chain_y, label_y)
     nx, ny = contacts.contact_mask.shape
 
-    fig = Figure(figsize=figsize)
-    axes = fig.subplots(1, 2)
+    panel_w, panel_h = _block_panel_size(nx, ny, CONTACT_MAP_PANEL_IN,
+                                         min_width=1.1, min_height=1.0)
+    if figsize is None:
+        figsize = (panel_w + 1.45 + CONTACT_MAP_COVERAGE_IN + 0.55,
+                   max(panel_h, 2.6) + 1.35)
+
+    fig = Figure(figsize=figsize, layout='constrained')
+    # The contact panel's share of the width tracks its own shape; the coverage
+    # panel's does not, because its content is one residue axis whose readable
+    # width has nothing to do with the contact block.
+    axes = fig.subplots(1, 2,
+                        width_ratios=[panel_w + 0.95, CONTACT_MAP_COVERAGE_IN])
 
     ax = axes[0]
     contact_distances = np.where(contacts.contact_mask, contacts.dist_matrix, np.nan)
-    im = ax.imshow(contact_distances, aspect='auto', origin='lower',
+    im = ax.imshow(contact_distances, aspect='equal', origin='lower',
                    cmap=cmap, vmin=0, vmax=contacts.dist_cutoff)
-    fig.colorbar(im, ax=ax, label='CB-CB distance (Å)')
-    ax.set_xlabel(f'{name_y} residue index')
-    ax.set_ylabel(f'{name_x} residue index')
-    ax.set_title('Interface Contact Map\n'
-                 f'(contacts ≤ {contacts.dist_cutoff:.0f} Å, coloured by distance)')
+    # A wide-short block leaves its axes box mostly empty, and a colour bar that
+    # spans the box rather than the image reads as a scale for whitespace. Both
+    # the map and the bar are therefore pinned to the top of the row and the bar
+    # is shrunk to roughly the image's own height.
+    ax.set_anchor('N')
+    true_h = CONTACT_MAP_PANEL_IN * min(1.0, nx / ny)
+    fig.colorbar(im, ax=ax, label='CB-CB distance (Å)', fraction=0.05, pad=0.03,
+                 shrink=min(1.0, max(0.3, true_h / max(panel_h, 2.6))),
+                 anchor=(0.0, 1.0), panchor=False)
+    ax.set_xlabel(f'{name_y} residue index', fontsize=10)
+    ax.set_ylabel(f'{name_x} residue index', fontsize=10)
+    # The panel is as narrow as the block is, so the title is wrapped to the
+    # width it actually has rather than being allowed to run off the figure.
+    ax.set_title(
+        'Interface Contact Map\n' + textwrap.fill(
+            f'(contacts ≤ {contacts.dist_cutoff:.0f} Å, coloured by distance; '
+            f'{nx}×{ny} block, drawn to scale)',
+            width=max(24, int((panel_w + 1.0) * 13))),
+        fontsize=9)
 
     ax2 = axes[1]
     bar_height = 0.35
@@ -6086,13 +6338,12 @@ def plot_interface_contact_map(
     ax2.set_yticklabels([f'{name_y}\n{ny} res', f'{name_x}\n{nx} res'])
     ax2.set_xlabel('Residue index (both chains on one scale)')
     ax2.set_title('Interface Coverage\n'
-                  '(amber = at interface, grey = non-interface)')
+                  '(amber = at interface, grey = non-interface)', fontsize=9)
     ax2.legend(
         handles=[mpatches.Patch(color=COLOUR_IF, label='Interface'),
                  mpatches.Patch(color=COLOUR_NON_IF, label='Non-interface')],
         loc='upper right', fontsize=9)
 
-    fig.tight_layout()
     return fig
 
 
@@ -6103,7 +6354,7 @@ def plot_pae_matrix(
     accession: str = "",
     labels: "Optional[Mapping[str, str | ChainLabel]]" = None,
     cmap: Optional[str | Colormap] = None,
-    figsize: Tuple[float, float] = (10.0, 9.0),
+    figsize: Tuple[float, float] = PAE_MATRIX_FIGSIZE,
 ) -> Figure:
     """
     The full PAE matrix, with the chain boundary and the four quadrants labelled.
@@ -6124,10 +6375,10 @@ def plot_pae_matrix(
                    not just the pair, because the axis names every block. Pass
                    `ChainIdentity.labels` to get real protein names; omit it and
                    each chain is called `'Chain <id>'` (R021).
-        cmap:      Colormap override; `None` uses `PAE_CMAP` (the R051 seam).
-        figsize:   Figure size in inches. `(10, 9)` at `figure.dpi = 150` is
-                   1500x1350 px, which overflows the notebook output area --
-                   preserved deliberately here and fixed by R050.
+        cmap:      Colormap override; `None` uses `PAE_CMAP` (the palette seam).
+        figsize:   Figure size in inches. The default is `PAE_MATRIX_FIGSIZE`,
+                   900x810 px at `figure.dpi = 150`, sized to fit a notebook
+                   output area whole (R050).
 
     Returns:
         The `Figure`.
@@ -6138,9 +6389,12 @@ def plot_pae_matrix(
         KeyError:   If a named chain is not in the document.
 
     Note:
-        `aspect='auto'` is what the notebook uses, and it stretches the matrix to
-        the axes box, so a heterodimer's square matrix renders non-square. R050
-        switches it to `'equal'`.
+        `aspect='equal'`, so the matrix renders square -- which it always is,
+        being `(nx + ny)` on both sides -- and each quadrant renders at its true
+        proportions. Under `'auto'`, which is what this drew before R050, the
+        image was stretched to whatever shape the axes box happened to be, and
+        a heterodimer's quadrants came out the wrong shape relative to each
+        other.
     """
     ids = pae.chain_ids
     if len(ids) < 2:
@@ -6155,20 +6409,25 @@ def plot_pae_matrix(
     label_of = {} if labels is None else dict(labels)
     name = {cid: _chain_label(cid, label_of.get(cid)) for cid in ids}
 
-    fig = Figure(figsize=figsize)
+    fig = Figure(figsize=figsize, layout='constrained')
     ax = fig.subplots()
 
-    im = ax.imshow(pae.matrix, aspect='auto', origin='upper',
+    im = ax.imshow(pae.matrix, aspect='equal', origin='upper',
                    cmap=resolve_pae_cmap(cmap), vmin=0, vmax=pae.max_pae)
-    fig.colorbar(im, ax=ax, label='PAE (Å) — lower = more confident')
+    fig.colorbar(im, ax=ax, label='PAE (Å) — lower = more confident',
+                 fraction=0.046, pad=0.03)
 
     # One dashed line per internal chain boundary. Two chains give the notebook's
-    # single pair of lines at nx - 0.5; more chains give one pair each.
+    # single pair of lines at nx - 0.5; more chains give one pair each. The line
+    # is dark with a white halo rather than plain white, because the sequential
+    # default is pale at the high-PAE end and a white line on a near-white
+    # inter-chain block is invisible.
     offset = 0
     for span in pae.spans[:-1]:
         offset += span.length
-        ax.axhline(offset - 0.5, color='white', linewidth=2, linestyle='--')
-        ax.axvline(offset - 0.5, color='white', linewidth=2, linestyle='--')
+        for draw in (ax.axhline, ax.axvline):
+            draw(offset - 0.5, color='#263238', linewidth=1.6, linestyle='--',
+                 path_effects=_haloed('white', 3.6))
 
     def _centre(chain_id: str) -> float:
         span_slice = pae.chain_slice(chain_id)
@@ -6181,22 +6440,69 @@ def plot_pae_matrix(
                            (cx, cy, f'Inter\n{name_y}→{name_x}'),
                            (cy, cy, f'Intra\n{name_y}')):
         ax.text(col, row, text, ha='center', va='center',
-                color='white', fontsize=11, fontweight='bold', alpha=0.8)
+                color='#212121', fontsize=9, fontweight='bold',
+                path_effects=_haloed('white', 2.8))
 
     if len(ids) == 2:
         first, second = ids
         n_first = pae.chain_length(first)
         ax.set_xlabel(f'Residue index ({name[first]}: 0 to {n_first - 1}, '
-                      f'{name[second]}: {n_first} to end)')
+                      f'{name[second]}: {n_first} to end)', fontsize=10)
     else:
-        ax.set_xlabel('Residue index (' + ', then '.join(name[c] for c in ids) + ')')
-    ax.set_ylabel('Residue index')
+        ax.set_xlabel('Residue index (' + ', then '.join(name[c] for c in ids) + ')',
+                      fontsize=10)
+    ax.set_ylabel('Residue index', fontsize=10)
     head = f'Full PAE Matrix — {accession}' if accession else 'Full PAE Matrix'
     ax.set_title(f'{head}\n'
-                 f'(dashed line = chain boundary between {name_x} and {name_y})')
+                 f'(dashed line = chain boundary between {name_x} and {name_y})',
+                 fontsize=11)
 
-    fig.tight_layout()
     return fig
+
+
+def _draw_quadrant_locator(
+    ax: Any,
+    n_rows: int,
+    n_cols: int,
+    name_x: str,
+    name_y: str,
+    cmap: Colormap,
+) -> None:
+    """
+    Draw a thumbnail of the full PAE matrix with the plotted quadrant filled in.
+
+    The axis labels on the panels already say which chain is on which axis, but
+    they do not say *where in the full matrix* the block came from, and a reader
+    who has just looked at the whole matrix has to take that on trust. This says
+    it in a picture: the same four blocks in the same arrangement and the same
+    proportions as the figure above, with one of them coloured.
+    """
+    total = n_rows + n_cols
+    split = n_rows / total
+
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(1.0, 0.0)          # origin upper, matching plot_pae_matrix
+    ax.set_aspect('equal')
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    blocks = (
+        # (x0, y0, w, h, highlighted)
+        (0.0, 0.0, split, split, False),                    # intra x
+        (split, 0.0, 1.0 - split, split, True),             # inter x -> y
+        (0.0, split, split, 1.0 - split, False),            # inter y -> x
+        (split, split, 1.0 - split, 1.0 - split, False),    # intra y
+    )
+    for x0, y0, width, height, hot in blocks:
+        ax.add_patch(mpatches.Rectangle(
+            (x0, y0), width, height,
+            facecolor=cmap(0.30) if hot else '#ECEFF1',
+            edgecolor='#37474F' if hot else '#B0BEC5',
+            linewidth=1.6 if hot else 0.8, zorder=2 if hot else 1))
+
+    ax.set_title('Full PAE matrix', fontsize=8)
 
 
 def plot_pae_score_masks(
@@ -6208,15 +6514,37 @@ def plot_pae_score_masks(
     label_x: "Optional[str | ChainLabel]" = None,
     label_y: "Optional[str | ChainLabel]" = None,
     cmap: Optional[str | Colormap] = None,
-    figsize: Tuple[float, float] = (14.0, 12.0),
+    figsize: Optional[Tuple[float, float]] = None,
 ) -> Figure:
     """
     Four views of the same inter-chain PAE block: what each score actually reads.
 
-    Every panel shows `pair.block_xy`; they differ only in which cells are left
-    coloured. This is the figure that explains why four scores computed from one
-    matrix can disagree -- they are not weighting the same evidence differently,
-    they are reading different subsets of it.
+    Every panel shows `pair.block_xy` -- the inter-chain quadrant, rows
+    `chain_x` and columns `chain_y` -- and they differ only in which cells are
+    left coloured. This is the figure that explains why four scores computed
+    from one matrix can disagree: they are not weighting the same evidence
+    differently, they are reading different subsets of it.
+
+    Three things about how it is drawn (R052):
+
+    * **Provenance is stated, not implied.** A strip above the panels carries a
+      thumbnail of the full matrix with the plotted quadrant filled in, and a
+      sentence naming the slice (`pae_matrix[:nx, nx:nx+ny]`, the upper-right
+      block of the previous figure). The axis labels alone leave the reader to
+      infer which quadrant this is.
+    * **One colour bar for all four panels.** It is attached to the whole set of
+      axes, so every panel gives up the same width. Attaching it to the last
+      axis alone -- which is what this did before R052 -- made the fourth panel
+      about 20% narrower than the other three, so the four blocks were not
+      comparable even though the whole point is comparing them.
+    * **Cells a score ignores are hatched slate, not plain grey.** Against the
+      old diverging map a flat grey was distinct enough. Against a sequential
+      ramp whose high-PAE end is nearly white it is not, so the underlay carries
+      a texture as well as a colour; see `PAE_UNUSED_COLOUR`.
+
+    The grid follows the block's shape rather than always being 2x2, and the
+    figure sizes itself from it, because at `aspect='equal'` a 8.16:1 block in a
+    2x2 grid is four slivers in a field of white. See `_mask_panel_grid`.
 
     Args:
         pair:       The ordered chain pair's PAE quadrants.
@@ -6225,11 +6553,12 @@ def plot_pae_score_masks(
                     model shares a scale.
         pae_cutoff: ipSAE's cutoff, named in the panel title rather than
                     hard-coded into it.
-        lis_cutoff: LIS's cutoff, likewise.
+        lis_cutoff: LIS's cutoff, likewise. So is pDockQ2's distance cutoff,
+                    which is read off `contacts`.
         label_x:    Display name for `chain_x`.
         label_y:    Display name for `chain_y`.
         cmap:       Colormap override; `None` uses `PAE_CMAP`.
-        figsize:    Figure size in inches.
+        figsize:    Figure size in inches, or `None` to size it from the block.
 
     Returns:
         The `Figure`. Per-panel cell counts are in the panel titles; the same
@@ -6237,51 +6566,123 @@ def plot_pae_score_masks(
 
     Raises:
         ValueError: If `contacts` and `pair` are not the same ordered pair.
-
-    Note:
-        Two known defects are preserved here on purpose and are R052's to fix.
-        The colour bar is attached to the last axis alone, so the fourth panel
-        renders narrower than the other three; and `aspect='auto'` distorts every
-        block whenever `nx != ny`.
     """
     name_x = _chain_label(contacts.chain_x, label_x)
     name_y = _chain_label(contacts.chain_y, label_y)
     masks = score_masks(pair, contacts, pae_cutoff=pae_cutoff, lis_cutoff=lis_cutoff)
+    # Score name, then the rule that selects its cells -- read off the arguments
+    # in force, never hard-coded, so a caller who changes a cutoff sees the
+    # change in the figure rather than being quietly contradicted by it.
     titles = {
-        'iptm_d0chn': 'ipTM_d0chn (all inter-chain, no cutoff)',
-        'ipsae': f'ipSAE (PAE < {pae_cutoff:.0f} Å)',
-        'lis': f'LIS   (PAE < {lis_cutoff:.0f} Å)',
-        'pdockq2': f'pDockQ2 (CB-CB ≤ {contacts.dist_cutoff:.0f} Å contacts)',
+        'iptm_d0chn': ('ipTM_d0chn', 'all inter-chain, no cutoff'),
+        'ipsae': ('ipSAE', f'PAE < {pae_cutoff:.0f} Å'),
+        'lis': ('LIS', f'PAE < {lis_cutoff:.0f} Å'),
+        'pdockq2': ('pDockQ2', f'CB-CB ≤ {contacts.dist_cutoff:.0f} Å contacts'),
     }
     block = pair.block_xy
+    n_rows, n_cols = block.shape
     n_cells_total = block.size
 
-    fig = Figure(figsize=figsize)
-    axes = fig.subplots(2, 2).ravel()
+    nrows, ncols = _mask_panel_grid(n_rows, n_cols)
+    longest = MASK_PANEL_MAX_IN if (nrows, ncols) == (2, 2) else MASK_PANEL_STRIP_IN
+    panel_w, panel_h = _block_panel_size(n_rows, n_cols, longest,
+                                         min_width=0.9, min_height=0.5)
+    fig_w = max(ncols * (panel_w + 0.78) + 1.15, MASK_STRIP_MIN_WIDTH_IN)
+
+    # The provenance sentence is wrapped to the width the figure turned out to
+    # have, and the strip is then made tall enough for however many lines that
+    # took. Sizing the strip first and hoping the text fits is what puts the
+    # last line of it through the first panel's title.
+    text_share = 4.6
+    text_width = int((fig_w * text_share / (1.0 + text_share) - 0.25) * 14)
+    provenance = textwrap.fill(
+        f'All four panels below show the SAME block: the inter-chain '
+        f'quadrant {name_x} → {name_y}, rows = {name_x} ({n_rows} residues), '
+        f'columns = {name_y} ({n_cols} residues). It is '
+        f'pae_matrix[:{n_rows}, {n_rows}:{n_rows + n_cols}] — the '
+        f'upper-right block of the full PAE matrix in the previous figure, '
+        f'shaded at left — and not the whole matrix. The panels differ only '
+        f'in which of its {n_cells_total:,} cells each score reads; hatched '
+        f'slate = cells that score ignores.',
+        width=max(38, text_width))
+    strip_in = max(MASK_LOCATOR_STRIP_IN,
+                   0.34 + (provenance.count(chr(10)) + 1) * 0.165)
+
+    if figsize is None:
+        figsize = (fig_w, strip_in + nrows * (panel_h + 0.86) + 0.25)
+    strip_in = min(strip_in, figsize[1] * 0.6)
+
+    fig = Figure(figsize=figsize, layout='constrained')
+    strip, grid = fig.subfigures(
+        2, 1, height_ratios=[strip_in, max(figsize[1] - strip_in, 1.0)])
+
+    resolved = resolve_pae_cmap(cmap)
+    # Unused cells are left as NaN and rendered transparent, so what shows
+    # through is the hatched patch drawn underneath -- one patch per axes rather
+    # than a second full-size image, which also keeps the hatch in display space
+    # so it stays the same weight whatever the block's pixel dimensions are.
+    painted = resolved.with_extremes(bad=(0.0, 0.0, 0.0, 0.0))
+
+    loc_ax, text_ax = strip.subplots(1, 2, width_ratios=[1.0, text_share])
+    _draw_quadrant_locator(loc_ax, n_rows, n_cols, name_x, name_y, resolved)
+    text_ax.axis('off')
+    text_ax.text(0.0, 0.97, provenance, transform=text_ax.transAxes,
+                 ha='left', va='top', fontsize=9, linespacing=1.3,
+                 color='#263238')
+
+    # A gridspec with an explicit colour-bar column, rather than a colour bar
+    # that steals space from whichever axes it happens to overlap. This is the
+    # R052 fix: the four panel columns are uniform by construction, so the four
+    # blocks are the same size and are therefore comparable, which is the entire
+    # point of drawing them together.
+    spec = grid.add_gridspec(nrows, ncols + 1,
+                             width_ratios=[1.0] * ncols + [0.08 * ncols])
+    axes = np.array([grid.add_subplot(spec[r, c])
+                     for r in range(nrows) for c in range(ncols)])
+    cax = grid.add_subplot(spec[:, -1])
 
     im = None
-    for ax, (key, mask) in zip(axes, masks.items()):
+    for index, (ax, (key, mask)) in enumerate(zip(axes, masks.items())):
+        row, col = divmod(index, ncols)
+        ax.add_patch(mpatches.Rectangle(
+            (0.0, 0.0), 1.0, 1.0, transform=ax.transAxes, zorder=0,
+            facecolor=PAE_UNUSED_COLOUR, edgecolor=PAE_UNUSED_HATCH_COLOUR,
+            hatch=PAE_UNUSED_HATCH, linewidth=0.0))
+
         display_pae = block.astype(float).copy()
         display_pae[~mask] = np.nan
-        grey_bg = np.ones(block.shape) * 35   # out-of-range sentinel
+        im = ax.imshow(display_pae, aspect='equal', origin='upper',
+                       cmap=painted, vmin=0, vmax=max_pae, zorder=1)
 
-        ax.imshow(grey_bg, aspect='auto', origin='upper',
-                  cmap='Greys', vmin=0, vmax=40, alpha=0.3)
-        im = ax.imshow(display_pae, aspect='auto', origin='upper',
-                       cmap=resolve_pae_cmap(cmap), vmin=0, vmax=max_pae)
         n_cells = int(mask.sum())
         frac = 100.0 * n_cells / n_cells_total if n_cells_total else 0.0
-        ax.set_title(f'{titles[key]}\n({n_cells} cells used, '
-                     f'{frac:.1f}% of inter-chain block)', fontsize=10)
-        ax.set_xlabel(f'{name_y} residue')
-        ax.set_ylabel(f'{name_x} residue')
+        score_name, rule = titles[key]
+        ax.set_title(f'{score_name}\n{rule}\n{n_cells:,} cells ({frac:.1f}%)',
+                     fontsize=8.5)
+        # Axis names on the edge panels only: every panel shows the same block,
+        # so repeating both names four times spends width that a tall-sliver
+        # block does not have. Tick labels stay on every panel.
+        if row == nrows - 1:
+            ax.set_xlabel(f'{name_y} residue', fontsize=8)
+        if col == 0:
+            ax.set_ylabel(f'{name_x} residue', fontsize=8)
+        # A panel can be under an inch wide when the block is a tall sliver, so
+        # the tick count is derived from the panel size rather than left to the
+        # default, which would overlap its own labels.
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=max(2, int(panel_w * 2.2)),
+                                               integer=True))
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=max(2, int(panel_h * 2.2)),
+                                               integer=True))
+        ax.tick_params(labelsize=7)
 
-    # Preserved defect (R052): one colour bar on the last axis only.
-    fig.colorbar(im, ax=axes[-1], label='PAE (Å)')
-    fig.suptitle(f'{name_x} → {name_y} Inter-chain PAE Block: '
-                 'cells used by each score\n(grey = not used by this score)',
-                 fontsize=12, y=1.01)
-    fig.tight_layout()
+    # One colour bar across every panel, so all four give up the same width.
+    bar = grid.colorbar(im, cax=cax)
+    bar.set_label('PAE (Å) — lower = more confident', fontsize=9)
+    bar.ax.tick_params(labelsize=8)
+    fig.suptitle(textwrap.fill(f'{name_x} → {name_y} inter-chain PAE block: '
+                               'cells used by each score',
+                               width=max(30, int(fig_w * 11))),
+                 fontsize=12)
     return fig
 
 

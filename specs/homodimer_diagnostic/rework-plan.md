@@ -1117,7 +1117,7 @@ cells `cell-016b/f/h/j` and the loop in `cell-016d`.
 
 ## W5 — Section 3, PAE Matrix Decomposition
 
-### `[ ] R050 — Fix the full PAE heatmap size, and the contact map's aspect`
+### `[x] R050 — Fix the full PAE heatmap size, and the contact map's aspect` — DONE 2026-09-08
 
 **Added by R022:** `plot_interface_contact_map`'s left panel also uses `aspect='auto'` and is
 owned by no other task. At 8.16:1 (fixture `AF-0000000204661110`) it distorts badly. Fixing it
@@ -1133,7 +1133,7 @@ producing a 1500×1350 px image that overflows the output area and triggers the 
 Fix by reducing the figure size and setting `aspect='equal'` so the matrix stays square.
 `aspect='auto'` is currently used, which also distorts the matrix for a heterodimer.
 
-### `[ ] R051 — Green default palette with a switchable alternative`
+### `[x] R051 — Green default palette with a switchable alternative` — DONE 2026-09-08
 
 > User note: *"Change the colour to the standard green palette... Personally, green is hard
 > to see against white. Also the issue of colour blindness. But the green palette should be
@@ -1149,7 +1149,7 @@ saturated* end, so confident regions stay legible on a white background — that
 "Low PAE (blue) ... High PAE (red)", which becomes wrong the moment the default changes; it
 has to be rewritten to describe the palette generically or to match the new default.
 
-### `[ ] R052 — Rebuild the score-mask panel`
+### `[x] R052 — Rebuild the score-mask panel` — DONE 2026-09-08
 
 > User note, three parts: explain the quadrant provenance, apply the palette, fix the aspect
 > ratio and colour bar.
@@ -1170,6 +1170,62 @@ has to be rewritten to describe the palette generically or to match the new defa
 5. The subtitle text should name the actual cut-offs in force rather than hard-coding them.
 
 ---
+
+
+**M5 outcome, 2026-09-08 (R050 + R051 + R052, batched as one visual pass).**
+
+**Sizing.** Full PAE matrix 1500x1350 -> **900x810**, which needs no downscaling in a ~900px
+notebook output column. Sized against dpi rather than lowering dpi, so text keeps its size.
+
+**Aspect fixed, and it was badly wrong before.** Every mask panel previously rendered at ~0.757
+*regardless of the data* — an 8.16:1 block and a 1:7.11 block came out the same near-square.
+Now exact on all four fixtures: 1.000 / 1.792 / 8.159 / 0.141. Panel widths equal at
+302/163/55/647 px respectively, against 929/929/929/**743** before, where the fourth panel was
+20% narrower because the colour bar was attached to it alone. Fixed with a dedicated colour-bar
+column in the gridspec.
+
+**The grid now follows the data**: 2x2 at low asymmetry, a single row of tall slivers at
+8.16:1, and the user's suggested vertical stack at 1:7.11. A 2x2 of 8.16:1 blocks is mostly
+whitespace.
+
+**Palette.** Default is `Greens_r`, dark green at PAE 0 (luminance 0.198) fading to near-white
+at high PAE (0.982) — verified, and it is the "green is hard to see against white" requirement:
+confident regions are the dark ones.
+
+**A real bug found by checking rather than assuming:** `PAE_CMAP_CHOICES` had
+`'colourblind_safe': 'viridis_r'`, which puts **bright yellow at PAE 0** and inverts the
+dark-equals-confident rule the whole design rests on. Corrected to `'viridis'`.
+
+**Colour-blindness verified, not asserted.** Machado-Oliveira-Fernandes 2009 at severity 1.0.
+`Greens_r` and `viridis` keep monotone lightness under deuteranopia, protanopia and
+tritanopia; `RdBu_r` does not, under any of them, which is why it is kept but documented as
+not recommended. The simulation was also run over the rendered figures, not just the ramps.
+
+**The grey underlay problem was solved properly.** `#90A4AE` chosen by search over OKLab dE,
+scoring 14.03 normal / 9.13 deuteranopia / 10.97 protanopia against the green ramp. But a
+single-hue ramp spans the whole lightness range, so **no** neutral can separate from all of it
+under every palette (plain grey collapses to 4.8-6.0 against viridis and RdBu_r). Hence
+`PAE_UNUSED_HATCH = '///'`: texture is the one channel independent of palette choice, and it
+also covers monochrome printing.
+
+**Two `dataviz` skill checks were overridden on domain grounds, stated rather than
+suppressed:** the green ramp's light-end contrast (a PAE heatmap is a contiguous field in a
+drawn frame, and fading to near-background at the uncertain end is semantically right —
+truncating the ramp would compress real dynamic range), and viridis's single-hue rule (it is
+the canonical perceptually-uniform scientific ramp).
+
+**Provenance stated for the mask panel**, as asked: a thumbnail locator of the full matrix with
+the displayed block shaded, beside a sentence naming the exact slice
+(`pae_matrix[:172, 172:344]`). Note the user's original wording said "top left quadrant"; it is
+the **upper-right** (`[:nA, nA:]`) — rows from the first chain, columns from the second. The
+locator diagram shades the actual block so the wording is not the only thing carrying it.
+
+**Orchestrator note on verification.** Three of my own measurement approaches disagreed with
+the agent and with each other. A control against plain `imshow(aspect='equal')` — correct by
+definition — showed my methods were the faulty ones; the agent's
+(`draw_without_rendering()` -> `apply_aspect()` -> `get_window_extent()`) reproduces the known
+answer exactly. Validate a measurement against a known-good case before using it to contradict
+a result.
 
 ## W6 — Section 4, Score Computation
 
@@ -1432,7 +1488,7 @@ review.
 | M2 | Module extracted; notebook shrunk 54% | R010, R010b, R011-R016 | 8 | **COMPLETE** 2026-09-08 |
 | M3 | Heterodimer support | R020-R025 | 6 | **COMPLETE** 2026-09-08 |
 | M4 | Scoring correctness + Section 4 | R003-R008, R060-R062 | 9 | **COMPLETE** 2026-09-08 |
-| M5 | PAE visuals | R050-R052 | 3 | |
+| M5 | PAE visuals | R050-R052 | 3 | **COMPLETE** 2026-09-08 |
 | M6 | 3D views | R070-R075, R030 | 7 | |
 | M7 | Summary + prose | R080-R082, R040 | 4 | |
 | M8 | Validation, docs, cleanup | R090-R095 | 6 | |
