@@ -1280,7 +1280,7 @@ plus the argmax marker, not a rewrite. Chain labels come from R021.
 
 ## W7 — Section 6, 3D Structure Visualisation
 
-### `[ ] R070 — Write supporting text for every view`
+### `[x] R070 — Write supporting text for every view` — DONE 2026-09-08
 
 > User note: *"What each plot is showing, and what we are colouring by."*
 
@@ -1308,7 +1308,7 @@ against a colourblind simulation before landing:
 | cartoon | teal `#009688` | coral `#FF7043` |
 | interface side chains | cornflower `#6495ED` | orange `#F5A623` |
 
-### `[ ] R072 — Explain View 3 (ipSAE d0res on the interface)`
+### `[x] R072 — Explain View 3 (ipSAE d0res on the interface)` — DONE 2026-09-08
 
 > User note: *"why are we using the d0res score? Not that it's wrong, but nothing is explained
 > about it. And also, what is low, mid, and high? Need to explain the value ranges."*
@@ -1407,9 +1407,12 @@ and 90.00. Consequence — the old 3D ladder **did not draw a residue at exactly
 View 2 now paints 172/172 rather than 171/172.
 
 **A genuine scientific finding from the new pDockQ2-vs-ipSAE view.** The `ipsae_only` category
-is empty on all four fixtures, and not from a bug: every interface residue with
-ipSAE_d0res >= 0.60 has a mean contact PAE of 1.8-2.6 A, far better than the 10 A cutoff
-(minimum contact-ptm 0.9362 across all fixtures). **pDockQ2 is never stricter than ipSAE at the
+is empty on all four fixtures, and not from a bug: across the 102 confident interface residues,
+**not one has a mean contact PAE worse than 2.61 A**, against a 10 A cutoff (minimum contact-ptm
+0.9362). *(Corrected 2026-09-08: this note first said "1.8-2.6 A", which was the range of the
+per-fixture maxima, not the span over residues. The true span is 0.85-2.61 A. Caught by the M6b
+agent, which declined to repeat the figure and wrote the notebook prose as a bound instead;
+re-measured independently.)* **pDockQ2 is never stricter than ipSAE at the
 residue level** — its reputation for strictness comes entirely from the pooling (mean pLDDT x
 mean ptm through a steep sigmoid), not from contact quality. Worth saying in R070/R072's prose,
 since it corrects a natural misreading.
@@ -1476,6 +1479,32 @@ the axes with what the normalisation actually is.
 
 ---
 
+
+**M6b outcome, 2026-09-08 (R070 + R072).** Section 6 restructured from one header plus a loop
+into header, setup, and six (markdown, code) pairs, so each view's explanation sits directly
+above it. Cell count 42 -> 54. Module untouched.
+
+**View 3's `d0res` choice is now argued, not asserted.** Two reasons, both checkable: it is the
+variant AFDB publishes as `ipSAEmax`, and it is the only one whose `d0` varies per residue, so
+`d0chn` painted on a structure would show the same shape at a more forgiving scale. The vague
+"red=low, yellow=mid, green=high" is replaced by a seven-row table mapping value -> exact ramp
+hex -> AFDB band, verified against `value_colours` rather than assumed.
+
+**A caveat the agent added unprompted and was right to:** the ramp midpoint (0.50) is not a
+band edge, so the colours are a continuous scale and the AFDB bands are not colour breaks. A
+reader would otherwise reasonably assume the green/yellow transition meant something.
+
+**Every factual claim carries a source**, and three are explicitly marked as reasoning rather
+than citation: the residue-level `d0` ordering (derived from the definitions, since the notebook
+states the theorem only at score level), "steep sigmoid" as qualitative, and the
+what-to-look-for guidance.
+
+**The M6b agent corrected an error in my own M6a note above**, declining to repeat a figure it
+could not reproduce. Re-measured independently: 102 confident interface residues, span
+0.85-2.61 A, minimum contact-ptm 0.9362. The note is fixed. Worth recording as a pattern: the
+agent wrote the notebook prose as a bound ("not one worse than 2.7 A") precisely because it
+could not verify the range it had been handed.
+
 ## W9 — Validation and documentation
 
 ### `[ ] R090 — Homodimer end-to-end run`
@@ -1537,7 +1566,7 @@ review.
 | M3 | Heterodimer support | R020-R025 | 6 | **COMPLETE** 2026-09-08 |
 | M4 | Scoring correctness + Section 4 | R003-R008, R060-R062 | 9 | **COMPLETE** 2026-09-08 |
 | M5 | PAE visuals | R050-R052 | 3 | **COMPLETE** 2026-09-08 |
-| M6 | 3D views | R070-R075, R030 | 7 | R071, R073, R074, R075 done; R070, R072, R030 remain |
+| M6 | 3D views | R070-R075, R030 | 7 | R070-R075 done; **R030 remains** |
 | M7 | Summary + prose | R080-R082, R040 | 4 | |
 | M8 | Validation, docs, cleanup | R090-R095 | 6 | |
 
