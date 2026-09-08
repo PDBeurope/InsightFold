@@ -54,6 +54,7 @@ Supplied by the user, stored in `specs/homodimer_diagnostic/references/`, which 
 | `lis_kim_2024.pdf` | LIS, bioRxiv 2024.02.19.580970v1 | R002 (widest threshold disagreement in the repo) |
 | `pdockq2_zhu_2023.pdf` | pDockQ2, Bioinformatics btad424 | R002, R061 |
 | `pdockq_bryant_2022.pdf` | pDockQ, Nat Commun s41467-022-28865-w | R061 (the 0.23 cutoff is already agreed across sources) |
+| `ipsae_confidence_bands_report.pdf` | **AFDB internal technical note, "ipSAE Confidence Bands for AlphaFold DB Homodimers", March 2026, 9 pp.** Supplied by the user 2026-09-08. Literature review behind the AFDB bands, with per-band rationale, a cross-reference table to ipTM and DockQ tiers, ready-made user-facing FAQ text, and a caveats section. Feeds R002b, R061, R072, R080. |
 | `afdb_dimers_2026.pdf` | **Han, Tsenkov, Venanzi et al., "AlphaFold Database expands to proteome-scale quaternary structures", bioRxiv 10.64898/2026.03.27.714458v2, posted 3 Jul 2026** | R009, R080. The authoritative source for the AFDB confidence criteria. The user is second author. |
 
 Also: EBI news item, "Millions of protein complexes added to AlphaFold Database shed light on
@@ -64,7 +65,26 @@ no thresholds. Usable as a friendly link for notebook readers, not as a technica
 
 ## Open questions
 
-None outstanding. All four questions raised on 2026-09-07 are resolved into D6-D10 above.
+**Q4 (2026-09-08) — PAE cutoff: RESOLVED by decision, caveat recorded.**
+
+`PAE_CUTOFF` stays at **10.0**, as in `CLAUDE.md` and the notebook today (user, 2026-09-08:
+use the original thresholds).
+
+Recorded so R092 is not surprised by it. The AFDB internal report §7 notes Dunbrack recommends
+15 Å for AlphaFold2 and 10 Å for AF3/Boltz-1, and AFDB dimers are AlphaFold-Multimer via
+ColabFold. The preprint's Methods (p.19) do not state which cutoff the production C++ ipSAE
+implementation used, and the API exposes no ipSAE value to infer it from. Measured effect of
+the choice on the fixtures:
+
+| Fixture | @ 10 | @ 15 | delta |
+|---------|------|------|-------|
+| `AF-0000000065889468` homodimer | 0.9143 | 0.9143 | 0.0000 |
+| `AF-0000000211034637` heterodimer | 0.7057 | 0.6981 | 0.0076 |
+
+Consequence to state once in the notebook, not to act on: a value computed here may differ
+slightly from the one behind an AFDB entry's badge if the production pipeline used a different
+cutoff, and near a band boundary that difference can change the band. R092 compares against
+`ipsae.py` at cutoff 10, which is self-consistent and is what the tolerance applies to.
 
 ---
 
@@ -90,7 +110,51 @@ ipSAE_d0chn), `:116-136` (the two `d0` helpers), `:751-756` (the `n0dom` sets), 
 plus three citation defects and three completeness gaps, all recorded in the document's
 "Corrections to the draft audit" section. The substantive omission is promoted to R007 below.
 
-### `[ ] R007 — Fix pDockQ2 direction handling`
+### `[ ] R002b — Use the AFDB bands report to fill prose gaps only`
+
+**Scope, set by the user 2026-09-08: the thresholds are settled and do not change.** The
+report is a source for the explanatory material that is currently missing, and for nothing
+else. No number in `threshold-reference.md` or `THRESHOLDS` moves as a result of this task.
+
+**The agreed thresholds, unchanged and final:**
+
+| Value | Green | Amber |
+|-------|-------|-------|
+| ipSAE (all three variants) | 0.70 | 0.60, with AFDB's published bands >=0.8 / 0.7-0.8 / 0.6-0.7 / <0.6 |
+| ipTM_d0chn | 0.70 | 0.30 |
+| pDockQ | 0.23 | 0.12 |
+| pDockQ2 | 0.23 | 0.10 |
+| LIS | 0.21 | 0.10 |
+| Joint AFDB rule | ipSAE_d0res >= 0.6 AND pDockQ2 >= 0.23 | |
+
+**What to take from the report — prose only:**
+- Per-band rationale for each ipSAE tier, with its citations (report §4).
+- The user-facing FAQ text in AFDB's house style (report §6). R072 and R080 follow its
+  wording rather than inventing parallel phrasing.
+- The cross-reference table aligning ipSAE, ipTM and DockQ tiers (report §5), as explanatory
+  context for a reader who knows one scale and not the others.
+- **The homodimer caveat (report §3.9), which belongs beside the traffic light:** AlphaFold's
+  false-positive rate is markedly worse for homodimers than heterodimers, with the
+  true-positive rate at 1% FPR dropping from 63% to 18%, because proteins that do not
+  homodimerise in vivo often have homologs that do.
+- The report's own caveats (§7): the bands are "evidence-informed rather than statistically
+  optimised on a dedicated homodimer validation set", ipSAE is not experimentally calibrated
+  for homodimers, and near-boundary scores (0.59 vs 0.61) must not be over-interpreted.
+
+**Recorded negative result, so it is not re-investigated.** Kim 2024 was re-searched in full
+for a second LIS tier. There is none: one Youden-optimal cutoff per metric (best LIS 0.21,
+ipTM 0.38, p.30) and no gradation below it. The nearby numbers 0.911 and 0.891 are **AUC
+values, not thresholds** (p.5) and must never be quoted as cutoffs. The LIS amber of 0.10
+stays a judgement call and is the only one in the table.
+
+**Not adopted.** The DockQ CAPRI ladder (0.23 / 0.49 / 0.80, report §3.3) would also transfer
+to pDockQ and pDockQ2 by the same sigmoid-fitting argument that licenses 0.23. It is recorded
+here as context a reader may find useful, and explicitly **not** used to change any threshold.
+
+**Done when.** The report's rationale, FAQ wording, cross-reference table and caveats are
+recorded for R061/R072/R080 to use, and no threshold has changed.
+
+### `[x] R007 — Fix pDockQ2 direction handling` — DONE 2026-09-08
 
 **What.** Compute pDockQ2 for both directions and report `max(A→B, B→A)`.
 
@@ -257,7 +321,7 @@ into something a user can see.
 **Done when.** Every directional score displays both directions plus the delta; the headline
 values still match `ipsae.py` within ±0.001; pDockQ is labelled symmetric rather than diffed.
 
-### `[ ] R003 — Fix d0dom directional asymmetry`
+### `[x] R003 — Fix d0dom directional asymmetry` — DONE 2026-09-08
 
 **What.** Compute `n0dom` and `d0dom` separately for A→B and B→A, per `ipsae.py` L775-778.
 
@@ -280,7 +344,7 @@ mismatch and assume the notebook is broken.
 **Done when.** Labels, the summary table, and the Section 4 prose say `ipTM_d0chn` and
 explain the distinction.
 
-### `[ ] R005 — Match calc_d0_array clamping for d0res`
+### `[x] R005 — Match calc_d0_array clamping for d0res` — DONE 2026-09-08
 
 **What.** Use `max(26, L)` clamping followed by the unconditional cubic form for the
 per-residue `d0`, and keep the scalar form for `d0chn` / `d0dom`.
@@ -289,12 +353,38 @@ per-residue `d0`, and keep the scalar form for `d0chn` / `d0dom`.
 residues with exactly 27 valid pairs, but the project tolerance is ±0.001 and the difference
 there is 0.039.
 
-### `[ ] R006 — Settle the zero-contact return values`
+### `[x] R006 — Settle the zero-contact return values` — DONE 2026-09-08
 
 **What.** Follow `ipsae.py` (`0.0`) and document why it differs from the sigmoid minima that
 Bryant's and Zhu's published code returns. Update the `CLAUDE.md` edge-case table.
 
 ---
+
+
+**R012 verification, 2026-09-08.** All seven values agree with the real `ipsae_v4.py`, run as a
+subprocess on both fixtures at cutoffs `10 8`. Worst delta 4.7e-5, and that is the reference's
+own print precision: `ipsae.py` writes pDockQ/pDockQ2/LIS with `%8.4f` and the ipSAE/ipTM
+columns with `%8.6f`, where agreement is ~4e-7. The ipSAE values were additionally cross-checked
+against an independent orchestrator-side computation written before the module existed, and
+match to six decimals on both fixtures.
+
+**Evidence that the fixes were needed, not theoretical.**
+- R003: heterodimer `n0dom` is 250 (A→B) vs 252 (B→A). Reusing the A→B `d0dom` for B→A, as the
+  notebook does, corrupts the B→A value by **0.00126** — past the ±0.001 tolerance.
+- R007: heterodimer pDockQ2 is 0.705404 (A→B) vs 0.685271 (B→A), a **0.020** spread.
+- Both fixtures happen to have A→B win the max, so neither bug moves the headline number *here*.
+  R007 is right by luck on these two inputs; swap the chain order and the notebook is wrong by
+  0.020. That is precisely why the fix is not optional.
+- R005: a residue with exactly 27 valid pairs scores 0.519068 with `d0_array` versus 0.500000
+  with `d0_scalar` — 19x the tolerance.
+- R006: verified `pDockQ` and `pDockQ2` both return exactly `0.0` at zero contacts.
+
+**One agent claim rejected on verification.** The agent reported that `formula-reference.md` D1
+and the R007 task text have the pDockQ2 directions swapped, citing figures 0.6853 and 0.7054.
+Checked: neither number appears in any spec file, and D1 contains no numbers at all — it states
+only that the notebook reports the A→B value alone, which the agent's own measurements confirm.
+The claim appears to conflate the plan's Q4 PAE-cutoff table (0.7057 vs 0.6981) with pDockQ2
+directions. No spec edit was made, and none is needed.
 
 ## W1 — Module extraction
 
@@ -364,7 +454,7 @@ layout, and rewrite notebook cell 1 as the D9 clone-and-path bootstrap.
 - The notebook's `parse_mmcif_atoms` strips the `_atom_site.` prefix from column names;
   `interface.py`'s keeps it. Pick one convention in the module (see R015).
 
-### `[ ] R012 — Move scoring into the module`
+### `[x] R012 — Move scoring into the module` — DONE 2026-09-08
 
 **Covers cell 18.** `d0_scalar`, `d0_array`, `ptm_func`, `compute_iptm_d0chn`,
 `compute_ipsae`, `compute_pdockq`, `compute_pdockq2`, `compute_lis`, plus `THRESHOLDS` and
@@ -858,17 +948,17 @@ done here, or point them at this file.
 
 ## Milestones and execution order
 
-44 tasks in 8 milestones. Execution model, agreed with the user 2026-09-07: each task goes to
+45 tasks in 8 milestones. Execution model, agreed with the user 2026-09-07: each task goes to
 a **fresh agent**, strictly **sequential**, and each result is verified against source and by
 execution before the next is dispatched. At every milestone boundary, work **stops** for user
 review.
 
 | # | Milestone | Tasks | n | Status |
 |---|-----------|-------|---|--------|
-| M1 | Ground truth | R001, R002, R009 | 3 | **COMPLETE** 2026-09-08 |
-| M2 | Module extracted, behaviour preserved | R010, R010b, R011-R016 | 8 | R010, R010b, R011 done |
+| M1 | Ground truth | R001, R002, R002b, R009 | 4 | R002b added 2026-09-08 |
+| M2 | Module extracted, behaviour preserved | R010, R010b, R011-R016 | 8 | R010, R010b, R011, R012 done |
 | M3 | Heterodimer support | R020-R024 | 5 | |
-| M4 | Scoring correctness + Section 4 | R003-R008, R060-R062 | 9 | |
+| M4 | Scoring correctness + Section 4 | R003-R008, R060-R062 | 9 | R003, R005, R006, R007 landed early in R012 |
 | M5 | PAE visuals | R050-R052 | 3 | |
 | M6 | 3D views | R070-R075, R030 | 7 | |
 | M7 | Summary + prose | R080-R082, R040 | 4 | |

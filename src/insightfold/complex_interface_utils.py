@@ -83,9 +83,13 @@ Status
 This file is being filled in over several tasks; the sections still empty carry
 a note naming the task that populates them. Implemented so far: AFDB access,
 structure parsing, PAE / pLDDT parsing and interface detection (R011), the shared
-scoring primitives (the two `d0` helpers and `ptm_func`), and the threshold
-table with its traffic light and the AFDB joint criterion. Still to come: the
-score functions (R012), the plots (R013) and the MolViewSpec views (R014).
+scoring primitives (the two `d0` helpers and `ptm_func`), the seven score
+functions (R012, landing R003 / R005 / R006 / R007), and the threshold table with
+its traffic light and the AFDB joint criterion. Still to come: the plots (R013)
+and the MolViewSpec views (R014).
+
+The notebook still carries its own inline copies of the scoring code and still
+runs off them; R016 switches the call sites over.
 """
 
 from __future__ import annotations
@@ -132,6 +136,24 @@ __all__ = [
     "d0_scalar",
     "d0_array",
     "ptm_func",
+    # score functions
+    "ResidueProfile",
+    "DirectionalPair",
+    "compute_iptm_d0chn",
+    "IPSAEResult",
+    "compute_ipsae",
+    "PDockQResult",
+    "compute_pdockq",
+    "PDockQ2Direction",
+    "PDockQ2Result",
+    "compute_pdockq2",
+    "LISDirection",
+    "LISResult",
+    "compute_lis",
+    # directional transparency (R008)
+    "DIRECTIONAL_DELTA_TOLERANCE",
+    "DirectionalDelta",
+    "directional_deltas",
     # thresholds
     "Provenance",
     "Band",
@@ -1340,14 +1362,1268 @@ def ptm_func(x: np.ndarray | float, d0: np.ndarray | float) -> np.ndarray | floa
 
 
 # ---------------------------------------------------------------------------
-# Score functions  --  filled by R012
+# Score functions
 # ---------------------------------------------------------------------------
-# `compute_iptm_d0chn`, `compute_ipsae` (d0res / d0chn / d0dom), `compute_pdockq`,
-# `compute_pdockq2`, `compute_lis`. Each takes an ordered chain pair per D4 and
-# returns the per-residue intermediates alongside the headline value, so the
-# plots and 3D views never recompute. R003 (per-direction d0dom), R005 (d0_array
-# for d0res), R006 (zero-contact returns) and R007 (max over both pDockQ2
-# directions) land with this section.
+# The seven reported values, all from `ipsae.py` v4 as transcribed in
+# `specs/homodimer_diagnostic/formula-reference.md`.
+#
+# Every function takes an **ordered** chain pair (D4) and returns a dataclass
+# carrying the headline value together with every intermediate a caller could
+# otherwise be tempted to recompute: per-residue arrays, per-direction values,
+# the `d0` and `n0` behind each one, contact counts, mean pLDDT, mean ptm, and
+# the index of the argmax residue. Nothing downstream needs to re-derive a
+# number that was already computed here.
+#
+# How the two directions combine, per `formula-reference.md`:
+#
+#   | value                          | per direction     | reported |
+#   |--------------------------------|-------------------|----------|
+#   | ipTM_d0chn                     | max over residues | max      |
+#   | ipSAE_d0res / _d0chn / _d0dom  | max over residues | max      |
+#   | pDockQ                         | -- symmetric --   | the value|
+#   | pDockQ2                        | pooled over pairs | max      |
+#   | LIS                            | pooled over pairs | mean     |
+#
+# Four corrections to the notebook's inline copies land here (R003, R005, R006,
+# R007); each is documented on the function that carries it.
+
+_DIRECTION_FORWARD = "xy"
+_DIRECTION_REVERSE = "yx"
+
+
+@dataclass(frozen=True, eq=False)
+class ResidueProfile:
+    """
+    One direction of a per-residue score: the profile plus what produced it.
+
+    "One direction" means the rows of a single PAE block. `values[i]` is the
+    score of residue `i` of `chain_row` measured against the whole of
+    `chain_col`, and the direction's reported value is `values.max()` -- the
+    score `ipsae.py` quotes is literally one residue's number
+    (`ipsae_v4.py:827-844`), which is why `argmax_index` is carried.
+
+    Attributes:
+        chain_row:     Chain supplying the rows, i.e. the alignment frame.
+        chain_col:     Chain supplying the columns.
+        values:        `(n_row,)` per-residue score. `0.0` for a residue with no
+                       contributing pair, matching `ipsae_v4.py:747, 796, 800`.
+        d0:            `(n_row,)` the `d0` actually used for each row. Constant
+                       across rows for the `d0chn` and `d0dom` variants, genuinely
+                       per-residue for `d0res`.
+        n0:            `(n_row,)` the `L` that produced each `d0`, so a caller can
+                       report the `n0chn` / `n0dom` / `n0res` that `ipsae.py`
+                       prints alongside the score.
+        n_valid_pairs: `(n_row,)` number of partner residues that contributed to
+                       each row's mean. Equals `n0` for `d0res`; for the other
+                       variants the two are different quantities and are kept
+                       apart deliberately.
+
+    Example
+    -------
+    >>> profile = ResidueProfile('A', 'B', np.array([0.2, 0.8, 0.5]),
+    ...                          np.full(3, 6.76), np.full(3, 344),
+    ...                          np.array([4, 9, 7]))
+    >>> profile.score, profile.argmax_index
+    (0.8, 1)
+    >>> profile.d0_at_argmax, profile.n0_at_argmax
+    (6.76, 344)
+    """
+
+    chain_row: str
+    chain_col: str
+    values: np.ndarray
+    d0: np.ndarray
+    n0: np.ndarray
+    n_valid_pairs: np.ndarray
+
+    @property
+    def score(self) -> float:
+        """This direction's reported value: the maximum over residues."""
+        return float(self.values.max()) if self.values.size else 0.0
+
+    @property
+    def argmax_index(self) -> int:
+        """Positional index of the residue whose value the direction reports.
+
+        `-1` for an empty chain. Ties go to the lowest index, as `np.argmax` and
+        `ipsae.py` both do.
+        """
+        return int(np.argmax(self.values)) if self.values.size else -1
+
+    @property
+    def d0_at_argmax(self) -> float:
+        """The `d0` of the argmax residue. This is the `d0` `ipsae.py` prints."""
+        return float(self.d0[self.argmax_index]) if self.values.size else 0.0
+
+    @property
+    def n0_at_argmax(self) -> int:
+        """The `n0` of the argmax residue. This is the `n0` `ipsae.py` prints."""
+        return int(self.n0[self.argmax_index]) if self.values.size else 0
+
+    @property
+    def n_interface_residues(self) -> int:
+        """Rows with at least one contributing pair."""
+        return int((self.n_valid_pairs > 0).sum())
+
+
+@dataclass(frozen=True, eq=False)
+class DirectionalPair:
+    """
+    A per-residue score in both directions, plus the combination `ipsae.py` reports.
+
+    PAE is asymmetric, so the two directions are two measurements rather than one
+    measurement seen twice. Collapsing them to the reported `max` early is what
+    hides bugs like R003 and R007, so both are kept and `delta` is offered as a
+    first-class diagnostic (R008).
+
+    Attributes:
+        name:    Key into `THRESHOLDS`, e.g. `'ipsae_d0res'`.
+        chain_x: First chain of the ordered pair.
+        chain_y: Second chain of the ordered pair.
+        forward: The `x -> y` profile.
+        reverse: The `y -> x` profile.
+
+    Example
+    -------
+    >>> f = ResidueProfile('A', 'B', np.array([0.4, 0.9]), np.full(2, 6.0),
+    ...                    np.full(2, 300), np.array([5, 7]))
+    >>> r = ResidueProfile('B', 'A', np.array([0.7, 0.3]), np.full(2, 6.0),
+    ...                    np.full(2, 300), np.array([6, 2]))
+    >>> pair = DirectionalPair('ipsae_d0chn', 'A', 'B', f, r)
+    >>> pair.score, pair.winner
+    (0.9, 'xy')
+    >>> round(pair.delta, 6)
+    0.2
+    """
+
+    name: str
+    chain_x: str
+    chain_y: str
+    forward: ResidueProfile
+    reverse: ResidueProfile
+
+    @property
+    def forward_score(self) -> float:
+        """The `x -> y` value."""
+        return self.forward.score
+
+    @property
+    def reverse_score(self) -> float:
+        """The `y -> x` value."""
+        return self.reverse.score
+
+    @property
+    def score(self) -> float:
+        """The reported value: `max(x -> y, y -> x)` (`ipsae_v4.py:851, 859, 867, 885`)."""
+        return max(self.forward_score, self.reverse_score)
+
+    @property
+    def winner(self) -> str:
+        """`'xy'` or `'yx'`, whichever direction supplied `score`.
+
+        An exact tie resolves to the forward direction. `ipsae.py` resolves a tie
+        to its own `chain1 > chain2` direction (`ipsae_v4.py:852-854`); the two
+        rules can only disagree about *which* identical number is quoted, never
+        about the number.
+        """
+        return _DIRECTION_FORWARD if self.forward_score >= self.reverse_score else _DIRECTION_REVERSE
+
+    @property
+    def winning_profile(self) -> ResidueProfile:
+        """The `ResidueProfile` that supplied `score`."""
+        return self.forward if self.winner == _DIRECTION_FORWARD else self.reverse
+
+    @property
+    def delta(self) -> float:
+        """`|x -> y  -  y -> x|`. Zero on a perfectly symmetric pair (R008)."""
+        return abs(self.forward_score - self.reverse_score)
+
+    @property
+    def d0(self) -> float:
+        """The `d0` of the winning direction's argmax residue (R003)."""
+        return self.winning_profile.d0_at_argmax
+
+    @property
+    def n0(self) -> int:
+        """The `n0` of the winning direction's argmax residue (R003)."""
+        return self.winning_profile.n0_at_argmax
+
+    @property
+    def argmax_index(self) -> int:
+        """Positional index, within the winning direction's chain, of the residue
+        whose value is the reported score."""
+        return self.winning_profile.argmax_index
+
+
+def _row_means(
+    block: np.ndarray,
+    mask: np.ndarray,
+    d0: np.ndarray | float,
+) -> np.ndarray:
+    """
+    Per-row mean of `ptm(block, d0)` over the entries `mask` selects.
+
+    Rows selecting nothing get `0.0`, which is `ipsae.py`'s
+    `... .mean() if valid.any() else 0.0` (`ipsae_v4.py:747, 796, 800`) without
+    the Python-level loop.
+
+    Args:
+        block: `(n_row, n_col)` PAE block.
+        mask:  `(n_row, n_col)` bool, which entries contribute.
+        d0:    Scalar, or `(n_row, 1)` for a per-residue `d0`.
+
+    Returns:
+        `(n_row,)` float64.
+    """
+    ptm = ptm_func(block.astype(np.float64), d0)
+    counts = mask.sum(axis=1)
+    totals = np.where(mask, ptm, 0.0).sum(axis=1)
+    means = np.zeros(block.shape[0], dtype=np.float64)
+    np.divide(totals, counts, out=means, where=counts > 0)
+    return means
+
+
+def compute_iptm_d0chn(pair: ChainPairPAE) -> DirectionalPair:
+    """
+    ipTM_d0chn: the TM-transformed PAE averaged over the **whole** partner chain.
+
+    No PAE cutoff at all -- every partner residue contributes
+    (`valid_pairs_iptm = (chains == chain2)`, `ipsae_v4.py:736`). That is the only
+    thing separating it from `ipSAE_d0chn`, which shares its `d0`.
+
+    `d0chn = d0_scalar(nx + ny)` (`ipsae_v4.py:731-732`, the **scalar** helper).
+    Reported value is `max` over the two directions (`ipsae_v4.py:851`).
+
+    Args:
+        pair: The ordered chain pair's PAE quadrants.
+
+    Returns:
+        A `DirectionalPair` named `'iptm_d0chn'`.
+
+    Note:
+        **This is not AlphaFold's own ipTM.** `ipsae.py` calls that `ipTM_af` and
+        reads it from the model's summary file (`ipsae_v4.py:944-946`); AFDB does
+        not expose it on these endpoints. This value is a reimplementation from
+        the PAE matrix and will not equal a number quoted by AlphaFold (R004).
+
+    Example
+    -------
+    >>> block_xy = np.array([[2.0, 30.0], [1.0, 1.0]], dtype=np.float32)
+    >>> block_yx = np.array([[3.0, 2.0], [30.0, 30.0]], dtype=np.float32)
+    >>> pair = ChainPairPAE('A', 'B', block_xy, block_yx,
+    ...                     np.zeros((2, 2), dtype=np.float32),
+    ...                     np.zeros((2, 2), dtype=np.float32))
+    >>> result = compute_iptm_d0chn(pair)
+    >>> result.n0                      # n0chn = nx + ny, never per residue
+    4
+    >>> round(result.d0, 6)            # d0_scalar(4) -> the 1.0 floor
+    1.0
+    >>> round(result.score, 6)         # residue A2: both partners at PAE 1.0
+    0.5
+    >>> result.winner, result.argmax_index
+    ('xy', 1)
+    """
+    d0chn = d0_scalar(pair.nx + pair.ny)
+    n0chn = pair.nx + pair.ny
+
+    def _profile(block: np.ndarray, row_chain: str, col_chain: str) -> ResidueProfile:
+        n_row, n_col = block.shape
+        # No cutoff: the mask is all-True, i.e. the whole partner chain.
+        all_pairs = np.ones(block.shape, dtype=bool)
+        return ResidueProfile(
+            chain_row=row_chain,
+            chain_col=col_chain,
+            values=_row_means(block, all_pairs, d0chn),
+            d0=np.full(n_row, d0chn, dtype=np.float64),
+            n0=np.full(n_row, n0chn, dtype=np.int64),
+            n_valid_pairs=np.full(n_row, n_col, dtype=np.int64),
+        )
+
+    return DirectionalPair(
+        name="iptm_d0chn",
+        chain_x=pair.chain_x,
+        chain_y=pair.chain_y,
+        forward=_profile(pair.block_xy, pair.chain_x, pair.chain_y),
+        reverse=_profile(pair.block_yx, pair.chain_y, pair.chain_x),
+    )
+
+
+@dataclass(frozen=True, eq=False)
+class IPSAEResult:
+    """
+    The three ipSAE variants, which differ only in what `L` feeds `d0`.
+
+    All three share one mask -- inter-chain pairs with `pae < pae_cutoff`
+    (`ipsae_v4.py:737, 783`) -- so they are computed together and the mask is
+    handed back rather than rebuilt by each caller.
+
+    Attributes:
+        chain_x:       First chain of the ordered pair.
+        chain_y:       Second chain of the ordered pair.
+        pae_cutoff:    The cutoff in force, tested strictly (`pae < cutoff`).
+        d0res:         Per-residue `d0`, from that residue's own valid-pair count.
+        d0chn:         Chain-pair `d0`, from `nx + ny`.
+        d0dom:         Domain `d0`, from the interacting residue count **of that
+                       direction** (R003).
+        valid_xy:      `(nx, ny)` bool mask of contributing pairs, `x -> y`.
+        valid_yx:      `(ny, nx)` bool mask of contributing pairs, `y -> x`.
+        n0dom_xy:      Interacting-residue count behind `d0dom` for `x -> y`.
+        n0dom_yx:      The same for `y -> x`. Differs from `n0dom_xy` in general.
+        d0dom_xy:      `d0_scalar(n0dom_xy)`.
+        d0dom_yx:      `d0_scalar(n0dom_yx)`.
+        n0chn:         `nx + ny`, shared by every direction and variant.
+        d0chn_value:   `d0_scalar(n0chn)`.
+    """
+
+    chain_x: str
+    chain_y: str
+    pae_cutoff: float
+    d0res: DirectionalPair
+    d0chn: DirectionalPair
+    d0dom: DirectionalPair
+    valid_xy: np.ndarray
+    valid_yx: np.ndarray
+    n0dom_xy: int
+    n0dom_yx: int
+    d0dom_xy: float
+    d0dom_yx: float
+    n0chn: int
+    d0chn_value: float
+
+    @property
+    def n0dom_delta(self) -> int:
+        """`|n0dom(x->y) - n0dom(y->x)|`, the mechanism behind R003.
+
+        Zero on a symmetric pair, non-zero on a real heterodimer, which is why
+        the bug was invisible while only homodimers were tested (R008).
+        """
+        return abs(self.n0dom_xy - self.n0dom_yx)
+
+    @property
+    def variants(self) -> Dict[str, DirectionalPair]:
+        """`{THRESHOLDS key: DirectionalPair}` for all three variants."""
+        return {
+            "ipsae_d0res": self.d0res,
+            "ipsae_d0chn": self.d0chn,
+            "ipsae_d0dom": self.d0dom,
+        }
+
+
+def compute_ipsae(
+    pair: ChainPairPAE,
+    pae_cutoff: float = PAE_CUTOFF,
+) -> IPSAEResult:
+    """
+    The three ipSAE variants for one ordered chain pair.
+
+    ipSAE is ipTM restricted to inter-chain pairs with `pae < pae_cutoff`, and
+    the three variants differ only in the `L` that sets `d0`:
+
+    | variant | `L` | helper | citation |
+    |---------|-----|--------|----------|
+    | `d0res` | that residue's own count of valid pairs | `d0_array` | `ipsae_v4.py:786-787` |
+    | `d0chn` | `nx + ny`, the whole chain pair | `d0_scalar` | `ipsae_v4.py:731-732` |
+    | `d0dom` | interacting residues in **this direction** | `d0_scalar` | `ipsae_v4.py:775-778` |
+
+    Args:
+        pair:       The ordered chain pair's PAE quadrants.
+        pae_cutoff: Strict inter-chain PAE cutoff.
+
+    Returns:
+        An `IPSAEResult`.
+
+    Note:
+        **R003 -- `d0dom` is per direction.** For `x -> y` with block `P`,
+        `n0dom = (P < cutoff).any(axis=1).sum() + (P < cutoff).any(axis=0).sum()`,
+        both terms read off *that direction's own block*. The notebook's inline
+        copy computed `n0dom` once from the `A -> B` block and reused it for
+        `B -> A`, so the reverse direction's whole per-residue array carried the
+        wrong `d0`. On the heterodimer fixture the two counts are 250 (`A -> B`)
+        and 252 (`B -> A`); on the homodimer both are 342, which is why the bug
+        survived homodimer-only testing. Measured effect of the bug on the
+        heterodimer: `ipSAE_d0dom(B -> A)` becomes 0.766806 instead of 0.768065,
+        an error of 0.0013 and so outside the +/-0.001 tolerance. It does not
+        move the *reported* value on either fixture only because `A -> B` wins
+        the `max` in both cases. The reported `n0dom` / `d0dom` are the winning
+        direction's (`ipsae_v4.py:870-883`).
+
+    Note:
+        **R005 -- `d0res` uses `d0_array`, not `d0_scalar`.** The two differ at
+        exactly `L == 27` (1.0 vs 1.038891). `d0chn` and `d0dom` keep the scalar
+        helper, because `ipsae.py` genuinely uses both.
+
+    Example
+    -------
+    >>> block_xy = np.array([[2.0, 30.0], [1.0, 1.0]], dtype=np.float32)
+    >>> block_yx = np.array([[3.0, 2.0], [30.0, 30.0]], dtype=np.float32)
+    >>> pair = ChainPairPAE('A', 'B', block_xy, block_yx,
+    ...                     np.zeros((2, 2), dtype=np.float32),
+    ...                     np.zeros((2, 2), dtype=np.float32))
+    >>> result = compute_ipsae(pair)
+
+    Row A1 keeps one partner, row A2 keeps two; rows B1 / B2 keep two and none:
+
+    >>> result.valid_xy.sum(axis=1).tolist(), result.valid_yx.sum(axis=1).tolist()
+    ([1, 2], [2, 0])
+
+    R003 in miniature -- the two directions disagree about `n0dom`:
+
+    >>> result.n0dom_xy, result.n0dom_yx
+    (4, 3)
+    >>> result.n0dom_delta
+    1
+
+    R005 in miniature -- `d0res` is per residue, `d0chn` and `d0dom` are not:
+
+    >>> result.d0res.forward.d0.round(6).tolist()
+    [1.0, 1.0]
+    >>> sorted({round(float(v), 6) for v in result.d0chn.forward.d0})
+    [1.0]
+    >>> round(result.d0dom.score, 6) == round(result.d0chn.score, 6)
+    True
+    """
+    n0chn = pair.nx + pair.ny
+    d0chn = d0_scalar(n0chn)
+
+    valid_xy = pair.block_xy < pae_cutoff
+    valid_yx = pair.block_yx < pae_cutoff
+
+    # R003: rows-with-any plus cols-with-any of *this direction's own* block.
+    n0dom_xy = int(valid_xy.any(axis=1).sum()) + int(valid_xy.any(axis=0).sum())
+    n0dom_yx = int(valid_yx.any(axis=1).sum()) + int(valid_yx.any(axis=0).sum())
+    d0dom_xy = d0_scalar(n0dom_xy)
+    d0dom_yx = d0_scalar(n0dom_yx)
+
+    def _fixed_d0_profile(
+        block: np.ndarray,
+        mask: np.ndarray,
+        row_chain: str,
+        col_chain: str,
+        d0: float,
+        n0: int,
+    ) -> ResidueProfile:
+        n_row = block.shape[0]
+        return ResidueProfile(
+            chain_row=row_chain,
+            chain_col=col_chain,
+            values=_row_means(block, mask, d0),
+            d0=np.full(n_row, d0, dtype=np.float64),
+            n0=np.full(n_row, n0, dtype=np.int64),
+            n_valid_pairs=mask.sum(axis=1).astype(np.int64),
+        )
+
+    def _per_residue_d0_profile(
+        block: np.ndarray,
+        mask: np.ndarray,
+        row_chain: str,
+        col_chain: str,
+    ) -> ResidueProfile:
+        n0res = mask.sum(axis=1).astype(np.int64)
+        d0res = d0_array(n0res)  # R005: the array helper, deliberately
+        return ResidueProfile(
+            chain_row=row_chain,
+            chain_col=col_chain,
+            values=_row_means(block, mask, d0res[:, np.newaxis]),
+            d0=d0res,
+            n0=n0res,
+            n_valid_pairs=n0res,
+        )
+
+    x, y = pair.chain_x, pair.chain_y
+    return IPSAEResult(
+        chain_x=x,
+        chain_y=y,
+        pae_cutoff=float(pae_cutoff),
+        d0res=DirectionalPair(
+            name="ipsae_d0res",
+            chain_x=x,
+            chain_y=y,
+            forward=_per_residue_d0_profile(pair.block_xy, valid_xy, x, y),
+            reverse=_per_residue_d0_profile(pair.block_yx, valid_yx, y, x),
+        ),
+        d0chn=DirectionalPair(
+            name="ipsae_d0chn",
+            chain_x=x,
+            chain_y=y,
+            forward=_fixed_d0_profile(pair.block_xy, valid_xy, x, y, d0chn, n0chn),
+            reverse=_fixed_d0_profile(pair.block_yx, valid_yx, y, x, d0chn, n0chn),
+        ),
+        d0dom=DirectionalPair(
+            name="ipsae_d0dom",
+            chain_x=x,
+            chain_y=y,
+            forward=_fixed_d0_profile(pair.block_xy, valid_xy, x, y, d0dom_xy, n0dom_xy),
+            reverse=_fixed_d0_profile(pair.block_yx, valid_yx, y, x, d0dom_yx, n0dom_yx),
+        ),
+        valid_xy=valid_xy,
+        valid_yx=valid_yx,
+        n0dom_xy=n0dom_xy,
+        n0dom_yx=n0dom_yx,
+        d0dom_xy=d0dom_xy,
+        d0dom_yx=d0dom_yx,
+        n0chn=n0chn,
+        d0chn_value=d0chn,
+    )
+
+
+@dataclass(frozen=True, eq=False)
+class PDockQResult:
+    """
+    pDockQ for one chain pair. Symmetric, so there is nothing to combine.
+
+    Attributes:
+        chain_x:              First chain of the ordered pair.
+        chain_y:              Second chain of the ordered pair.
+        score:                The reported pDockQ.
+        n_contact_pairs:      `npairs`, the count of residue **pairs** within the
+                              cutoff. Not the interface residue count.
+        n_interface_residues: `nres`, both chains summed. `ipsae.py` computes this
+                              (`ipsae_v4.py:662`) and only prints it; it does not
+                              enter the score.
+        mean_plddt:           Mean pLDDT over the union of interface residues.
+        x:                    `mean_plddt * log10(n_contact_pairs)`, the sigmoid's
+                              argument.
+        mask_x:               `(nx,)` bool, interface residues of `chain_x`.
+        mask_y:               `(ny,)` bool, interface residues of `chain_y`.
+        dist_cutoff:          Contact cutoff in Angstrom, tested inclusively.
+        symmetric:            Always `True`, and checked rather than assumed --
+                              see `compute_pdockq`.
+    """
+
+    chain_x: str
+    chain_y: str
+    score: float
+    n_contact_pairs: int
+    n_interface_residues: int
+    mean_plddt: float
+    x: float
+    mask_x: np.ndarray
+    mask_y: np.ndarray
+    dist_cutoff: float
+    symmetric: bool = True
+
+
+def _pdockq_from(
+    contact_mask: np.ndarray,
+    plddt_row: np.ndarray,
+    plddt_col: np.ndarray,
+) -> Tuple[float, int, int, float, float]:
+    """
+    pDockQ from one orientation of a contact mask.
+
+    Split out so `compute_pdockq` can run it in both orientations and check the
+    symmetry claim by execution instead of asserting it in a comment.
+
+    Args:
+        contact_mask: `(n_row, n_col)` bool.
+        plddt_row:    `(n_row,)` pLDDT of the row chain.
+        plddt_col:    `(n_col,)` pLDDT of the column chain.
+
+    Returns:
+        `(score, n_contact_pairs, n_interface_residues, mean_plddt, x)`.
+    """
+    n_pairs = int(contact_mask.sum())
+    mask_row = contact_mask.any(axis=1)
+    mask_col = contact_mask.any(axis=0)
+    n_residues = int(mask_row.sum()) + int(mask_col.sum())
+    if n_pairs == 0:
+        # R006: `ipsae_v4.py:669` short-circuits to 0.0, not to the sigmoid's
+        # x -> -inf limit of 0.018.
+        return 0.0, 0, n_residues, 0.0, 0.0
+    interface_plddt = np.concatenate(
+        [np.asarray(plddt_row, dtype=np.float64)[mask_row],
+         np.asarray(plddt_col, dtype=np.float64)[mask_col]]
+    )
+    mean_plddt = float(interface_plddt.mean())
+    x = mean_plddt * float(np.log10(n_pairs))
+    score = 0.724 / (1.0 + np.exp(-0.052 * (x - 152.611))) + 0.018
+    return float(score), n_pairs, n_residues, mean_plddt, x
+
+
+def compute_pdockq(
+    contacts: InterfaceContacts,
+    plddt_x: np.ndarray,
+    plddt_y: np.ndarray,
+) -> PDockQResult:
+    """
+    pDockQ (Bryant 2022) as `ipsae.py` computes it.
+
+    `x = mean_plddt * log10(npairs)`, then
+    `0.724 / (1 + exp(-0.052 * (x - 152.611))) + 0.018` (`ipsae_v4.py:663-665`).
+
+    Two things are easy to get wrong and are therefore spelled out:
+
+    - `npairs` is the count of **contact pairs**, not of interface residues
+      (`ipsae_v4.py:653`). `CLAUDE.md`'s version uses the residue count, which for
+      a typical interface makes `x` several times too small.
+    - `mean_plddt` is the unweighted mean over the **union** of interface
+      residues from both chains (`ipsae_v4.py:663`), so a residue with forty
+      contacts counts exactly once.
+
+    Args:
+        contacts: The ordered pair's `InterfaceContacts`.
+        plddt_x:  `(nx,)` pLDDT of `contacts.chain_x`, CB-atom values.
+        plddt_y:  `(ny,)` pLDDT of `contacts.chain_y`.
+
+    Returns:
+        A `PDockQResult`.
+
+    Raises:
+        ValueError: If a pLDDT array's length does not match its chain, which
+            would silently score the wrong residues.
+        AssertionError: If the two orientations disagree -- see the symmetry note.
+
+    Note:
+        **R006 -- zero contacts return `0.0`.** `ipsae.py` short-circuits to
+        `0.0` (`ipsae_v4.py:669`) rather than to `0.018`, the `x -> -inf` limit of
+        Bryant's sigmoid that Bryant's own code returns. This is a real
+        disagreement between two defensible conventions, not a transcription
+        error, and it is settled in favour of `ipsae.py` because +/-0.001
+        agreement with `ipsae.py` is this project's acceptance criterion. A
+        reader comparing against Bryant's published implementation on a
+        non-interacting pair will see 0.0 here and 0.018 there.
+
+    Note:
+        **Symmetry is checked, not assumed.** `npairs` and the interface residue
+        set are both invariant under swapping the chains, which is why `ipsae.py`
+        prints pDockQ unmaxed (`ipsae_v4.py:989`) while it maxes pDockQ2. Rather
+        than take that on trust, the score is computed in both orientations and
+        the two are required to agree; R008 then reports pDockQ as symmetric
+        instead of showing it an empty directional diff.
+
+    Example
+    -------
+    >>> a = ChainCoords('A', np.array([[0.0, 0.0, 0.0]], dtype=np.float32),
+    ...                 np.array([1], dtype=np.int32), np.array(['ALA']),
+    ...                 np.array([90.0], dtype=np.float32))
+    >>> b = ChainCoords('B', np.array([[3.0, 0.0, 0.0], [40.0, 0.0, 0.0]], dtype=np.float32),
+    ...                 np.array([1, 2], dtype=np.int32), np.array(['ALA', 'ALA']),
+    ...                 np.array([80.0, 70.0], dtype=np.float32))
+    >>> contacts = detect_interface(a, b)
+    >>> result = compute_pdockq(contacts, a.plddt, b.plddt)
+    >>> result.n_contact_pairs, result.n_interface_residues
+    (1, 2)
+    >>> result.mean_plddt          # (90 + 80) / 2, the far B residue excluded
+    85.0
+    >>> round(result.x, 6)         # log10(1) == 0
+    0.0
+    >>> round(result.score, 6)     # deep in the sigmoid's lower tail
+    0.018259
+
+    R006, no contacts at all:
+
+    >>> far = ChainCoords('B', np.array([[99.0, 0.0, 0.0]], dtype=np.float32),
+    ...                   np.array([1], dtype=np.int32), np.array(['ALA']),
+    ...                   np.array([80.0], dtype=np.float32))
+    >>> compute_pdockq(detect_interface(a, far), a.plddt, far.plddt).score
+    0.0
+    """
+    nx, ny = contacts.contact_mask.shape
+    if len(plddt_x) != nx or len(plddt_y) != ny:
+        raise ValueError(
+            f"pLDDT lengths {len(plddt_x)}/{len(plddt_y)} do not match the contact "
+            f"matrix {nx}x{ny} for chains {contacts.chain_x}/{contacts.chain_y}."
+        )
+
+    score, n_pairs, n_residues, mean_plddt, x = _pdockq_from(
+        contacts.contact_mask, plddt_x, plddt_y
+    )
+    # Same score, chains swapped. If this ever disagrees, the symmetry claim that
+    # lets `ipsae.py` print pDockQ unmaxed is false and every caller must know.
+    reverse = _pdockq_from(contacts.contact_mask.T, plddt_y, plddt_x)
+    assert abs(reverse[0] - score) < 1e-12 and reverse[1] == n_pairs, (
+        f"pDockQ is not symmetric for {contacts.chain_x}/{contacts.chain_y}: "
+        f"{score} vs {reverse[0]}."
+    )
+
+    return PDockQResult(
+        chain_x=contacts.chain_x,
+        chain_y=contacts.chain_y,
+        score=score,
+        n_contact_pairs=n_pairs,
+        n_interface_residues=n_residues,
+        mean_plddt=mean_plddt,
+        x=x,
+        mask_x=contacts.mask_x,
+        mask_y=contacts.mask_y,
+        dist_cutoff=contacts.dist_cutoff,
+    )
+
+
+@dataclass(frozen=True, eq=False)
+class PDockQ2Direction:
+    """
+    One direction of pDockQ2, plus its per-residue decomposition.
+
+    Attributes:
+        chain_row:           Chain supplying the rows of the PAE block read.
+        chain_col:           Chain supplying the columns.
+        score:               This direction's pDockQ2.
+        n_contact_pairs:     `npairs`, shared by both directions.
+        mean_plddt:          Mean pLDDT over the union of interface residues.
+                             Symmetric: identical in both directions.
+        mean_ptm:            `sum(ptm(PAE, d0=10)) / npairs` over contact pairs,
+                             read from **this direction's** PAE block. This is the
+                             only asymmetric ingredient (R007).
+        x:                   `mean_plddt * mean_ptm`.
+        mean_ptm_by_residue: `(n_row,)` the mean of `ptm(PAE, d0=10)` over each
+                             row residue's own contact pairs, `np.nan` for a
+                             residue with no contacts. The per-residue quantity
+                             pDockQ2 pools away; exposed for R074's contact
+                             quality view.
+        contact_counts:      `(n_row,)` contacts per row residue.
+    """
+
+    chain_row: str
+    chain_col: str
+    score: float
+    n_contact_pairs: int
+    mean_plddt: float
+    mean_ptm: float
+    x: float
+    mean_ptm_by_residue: np.ndarray
+    contact_counts: np.ndarray
+
+    @property
+    def n_interface_residues_row(self) -> int:
+        """Row-chain residues with at least one contact."""
+        return int((self.contact_counts > 0).sum())
+
+
+@dataclass(frozen=True, eq=False)
+class PDockQ2Result:
+    """
+    pDockQ2 in both directions, and the `max` `ipsae.py` reports.
+
+    Attributes:
+        chain_x: First chain of the ordered pair.
+        chain_y: Second chain of the ordered pair.
+        forward: The `x -> y` direction.
+        reverse: The `y -> x` direction.
+        name:    Key into `THRESHOLDS`.
+    """
+
+    chain_x: str
+    chain_y: str
+    forward: PDockQ2Direction
+    reverse: PDockQ2Direction
+    name: str = "pdockq2"
+
+    @property
+    def forward_score(self) -> float:
+        """The `x -> y` value."""
+        return self.forward.score
+
+    @property
+    def reverse_score(self) -> float:
+        """The `y -> x` value."""
+        return self.reverse.score
+
+    @property
+    def score(self) -> float:
+        """The reported value: `max(x -> y, y -> x)` (`ipsae_v4.py:977, 990`)."""
+        return max(self.forward_score, self.reverse_score)
+
+    @property
+    def winner(self) -> str:
+        """`'xy'` or `'yx'`, whichever direction supplied `score`; ties go forward."""
+        return _DIRECTION_FORWARD if self.forward_score >= self.reverse_score else _DIRECTION_REVERSE
+
+    @property
+    def winning_direction(self) -> PDockQ2Direction:
+        """The `PDockQ2Direction` that supplied `score`."""
+        return self.forward if self.winner == _DIRECTION_FORWARD else self.reverse
+
+    @property
+    def delta(self) -> float:
+        """`|x -> y  -  y -> x|`. Non-zero whenever the PAE block is asymmetric (R007)."""
+        return abs(self.forward_score - self.reverse_score)
+
+
+def _pdockq2_direction(
+    block: np.ndarray,
+    contact_mask: np.ndarray,
+    row_chain: str,
+    col_chain: str,
+    mean_plddt: float,
+    n_pairs: int,
+) -> PDockQ2Direction:
+    """
+    One direction of pDockQ2.
+
+    Args:
+        block:        `(n_row, n_col)` PAE, rows aligned on `row_chain`.
+        contact_mask: `(n_row, n_col)` bool, same orientation as `block`.
+        row_chain:    Row chain id.
+        col_chain:    Column chain id.
+        mean_plddt:   Interface mean pLDDT, already computed by pDockQ.
+        n_pairs:      Contact pair count.
+
+    Returns:
+        A `PDockQ2Direction`.
+    """
+    counts = contact_mask.sum(axis=1).astype(np.int64)
+    ptm = ptm_func(block.astype(np.float64), 10.0)  # fixed d0, `ipsae_v4.py:687`
+    row_totals = np.where(contact_mask, ptm, 0.0).sum(axis=1)
+
+    by_residue = np.full(block.shape[0], np.nan, dtype=np.float64)
+    np.divide(row_totals, counts, out=by_residue, where=counts > 0)
+
+    if n_pairs == 0:
+        # R006: `ipsae_v4.py:700` returns 0.0, not Zhu's 0.005 sigmoid minimum.
+        return PDockQ2Direction(
+            chain_row=row_chain,
+            chain_col=col_chain,
+            score=0.0,
+            n_contact_pairs=0,
+            mean_plddt=0.0,
+            mean_ptm=0.0,
+            x=0.0,
+            mean_ptm_by_residue=by_residue,
+            contact_counts=counts,
+        )
+
+    mean_ptm = float(row_totals.sum() / n_pairs)
+    x = mean_plddt * mean_ptm
+    score = float(1.31 / (1.0 + np.exp(-0.075 * (x - 84.733))) + 0.005)
+    return PDockQ2Direction(
+        chain_row=row_chain,
+        chain_col=col_chain,
+        score=score,
+        n_contact_pairs=n_pairs,
+        mean_plddt=mean_plddt,
+        mean_ptm=mean_ptm,
+        x=x,
+        mean_ptm_by_residue=by_residue,
+        contact_counts=counts,
+    )
+
+
+def compute_pdockq2(
+    contacts: InterfaceContacts,
+    pair: ChainPairPAE,
+    plddt_x: np.ndarray,
+    plddt_y: np.ndarray,
+) -> PDockQ2Result:
+    """
+    pDockQ2 (Zhu 2023) as `ipsae.py` computes it, in both directions.
+
+    `mean_ptm` is the mean of `ptm(PAE, d0=10)` over the contact pairs,
+    `x = mean_plddt * mean_ptm`, and
+    `1.31 / (1 + exp(-0.075 * (x - 84.733))) + 0.005` (`ipsae_v4.py:686-695`).
+    `mean_plddt` is pDockQ's, over the union of interface residues from both
+    chains -- an unweighted mean over residues, not over contact pairs.
+
+    Args:
+        contacts: The ordered pair's `InterfaceContacts`.
+        pair:     The same ordered pair's PAE quadrants. Must name the same two
+                  chains in the same order.
+        plddt_x:  `(nx,)` pLDDT of `chain_x`, CB-atom values.
+        plddt_y:  `(ny,)` pLDDT of `chain_y`.
+
+    Returns:
+        A `PDockQ2Result` carrying both directions.
+
+    Raises:
+        ValueError: If the contacts and the PAE pair disagree about the chains or
+            their lengths, or if a pLDDT array's length is wrong.
+
+    Note:
+        **R007 -- pDockQ2 is directional and the reported value is a `max`.**
+        `mean_ptm` reads only the `x -> y` PAE block (`ipsae_v4.py:686`) while
+        `mean_plddt` is symmetric, so the two directions differ whenever the PAE
+        matrix is asymmetric. `ipsae.py` reports
+        `max(pDockQ2[A][B], pDockQ2[B][A])` (`ipsae_v4.py:977, 990`). The
+        notebook's inline copy is passed a single block, `pae_AB`, and reports
+        the `A -> B` value alone. On the heterodimer fixture the two directions
+        are 0.705404 (`A -> B`) and 0.685271 (`B -> A`), a gap of 0.020; the
+        notebook's number is correct there only because `A -> B` happens to be
+        the larger. Reverse the chain order and the same code is wrong by 0.020,
+        twenty times the tolerance.
+
+    Note:
+        **R006 -- zero contacts return `0.0`**, per `ipsae_v4.py:700`, rather than
+        the 0.005 minimum of Zhu's sigmoid that Zhu's own code returns. Same
+        reasoning as `compute_pdockq`.
+
+    Note:
+        **R074 -- `mean_ptm_by_residue`.** Each direction also carries the mean
+        `ptm(PAE, d0=10)` over each row residue's own contact pairs, which is the
+        per-residue quantity pDockQ2 pools into one number. `np.nan` marks a
+        residue with no contacts, so a colour map can leave non-interface
+        residues unpainted rather than painting them a misleading zero.
+
+    Example
+    -------
+    >>> a = ChainCoords('A', np.array([[0.0, 0.0, 0.0], [40.0, 0.0, 0.0]], dtype=np.float32),
+    ...                 np.array([1, 2], dtype=np.int32), np.array(['ALA', 'ALA']),
+    ...                 np.array([90.0, 60.0], dtype=np.float32))
+    >>> b = ChainCoords('B', np.array([[3.0, 0.0, 0.0], [41.0, 0.0, 0.0]], dtype=np.float32),
+    ...                 np.array([1, 2], dtype=np.int32), np.array(['ALA', 'ALA']),
+    ...                 np.array([80.0, 70.0], dtype=np.float32))
+    >>> contacts = detect_interface(a, b)
+    >>> contacts.n_contact_pairs
+    2
+    >>> block_xy = np.array([[0.0, 20.0], [20.0, 10.0]], dtype=np.float32)
+    >>> block_yx = np.array([[10.0, 20.0], [20.0, 0.0]], dtype=np.float32)
+    >>> pae = ChainPairPAE('A', 'B', block_xy, block_yx,
+    ...                    np.zeros((2, 2), dtype=np.float32),
+    ...                    np.zeros((2, 2), dtype=np.float32))
+    >>> result = compute_pdockq2(contacts, pae, a.plddt, b.plddt)
+
+    Contacts are A1-B1 and A2-B2. Forward reads PAE 0.0 and 10.0, reverse reads
+    10.0 and 0.0 -- the same pairs, different measurements, so the same
+    `mean_ptm` here by construction:
+
+    >>> round(result.forward.mean_ptm, 6), round(result.reverse.mean_ptm, 6)
+    (0.75, 0.75)
+    >>> result.forward.mean_ptm_by_residue.round(6).tolist()
+    [1.0, 0.5]
+    >>> result.reverse.mean_ptm_by_residue.round(6).tolist()
+    [0.5, 1.0]
+    >>> result.delta
+    0.0
+
+    R006, no contacts at all:
+
+    >>> far = ChainCoords('B', np.array([[99.0, 0.0, 0.0], [99.0, 9.0, 0.0]], dtype=np.float32),
+    ...                   np.array([1, 2], dtype=np.int32), np.array(['ALA', 'ALA']),
+    ...                   np.array([80.0, 70.0], dtype=np.float32))
+    >>> empty = compute_pdockq2(detect_interface(a, far), pae, a.plddt, far.plddt)
+    >>> empty.score, empty.forward.score, empty.reverse.score
+    (0.0, 0.0, 0.0)
+    """
+    if (contacts.chain_x, contacts.chain_y) != (pair.chain_x, pair.chain_y):
+        raise ValueError(
+            f"Contacts are for {contacts.chain_x}->{contacts.chain_y} but the PAE "
+            f"pair is {pair.chain_x}->{pair.chain_y}; the blocks would not align."
+        )
+    if contacts.contact_mask.shape != pair.block_xy.shape:
+        raise ValueError(
+            f"Contact matrix {contacts.contact_mask.shape} and PAE block "
+            f"{pair.block_xy.shape} disagree about the chain lengths."
+        )
+    if len(plddt_x) != pair.nx or len(plddt_y) != pair.ny:
+        raise ValueError(
+            f"pLDDT lengths {len(plddt_x)}/{len(plddt_y)} do not match chain "
+            f"lengths {pair.nx}/{pair.ny}."
+        )
+
+    # Same union-of-interface-residues mean pLDDT pDockQ uses; `ipsae.py` reuses
+    # the set built during the pDockQ pass (`ipsae_v4.py:692`).
+    _, n_pairs, _, mean_plddt, _ = _pdockq_from(contacts.contact_mask, plddt_x, plddt_y)
+
+    return PDockQ2Result(
+        chain_x=pair.chain_x,
+        chain_y=pair.chain_y,
+        forward=_pdockq2_direction(
+            pair.block_xy, contacts.contact_mask,
+            pair.chain_x, pair.chain_y, mean_plddt, n_pairs,
+        ),
+        reverse=_pdockq2_direction(
+            pair.block_yx, contacts.contact_mask.T,
+            pair.chain_y, pair.chain_x, mean_plddt, n_pairs,
+        ),
+    )
+
+
+@dataclass(frozen=True, eq=False)
+class LISDirection:
+    """
+    One direction of LIS.
+
+    Attributes:
+        chain_row:     Chain supplying the rows of the PAE block read.
+        chain_col:     Chain supplying the columns.
+        score:         `mean((cutoff - PAE) / cutoff)` over sub-cutoff pairs.
+        n_valid_pairs: Pairs with `PAE < cutoff`.
+        n_pairs:       All inter-chain pairs in the block, `n_row * n_col`.
+    """
+
+    chain_row: str
+    chain_col: str
+    score: float
+    n_valid_pairs: int
+    n_pairs: int
+
+    @property
+    def fraction_valid(self) -> float:
+        """Share of the block below the cutoff; `0.0` for an empty block."""
+        return self.n_valid_pairs / self.n_pairs if self.n_pairs else 0.0
+
+
+@dataclass(frozen=True, eq=False)
+class LISResult:
+    """
+    LIS in both directions, and the **mean** `ipsae.py` reports.
+
+    Attributes:
+        chain_x:    First chain of the ordered pair.
+        chain_y:    Second chain of the ordered pair.
+        forward:    The `x -> y` direction.
+        reverse:    The `y -> x` direction.
+        lis_cutoff: The PAE cutoff in force.
+        name:       Key into `THRESHOLDS`.
+    """
+
+    chain_x: str
+    chain_y: str
+    forward: LISDirection
+    reverse: LISDirection
+    lis_cutoff: float
+    name: str = "lis"
+
+    @property
+    def forward_score(self) -> float:
+        """The `x -> y` value."""
+        return self.forward.score
+
+    @property
+    def reverse_score(self) -> float:
+        """The `y -> x` value."""
+        return self.reverse.score
+
+    @property
+    def score(self) -> float:
+        """The reported value: the **mean** of the two directions (`ipsae_v4.py:982`).
+
+        LIS is the one value `ipsae.py` averages rather than maxes. `max >= mean`
+        always, so using `max` here -- as `CLAUDE.md` does -- systematically
+        overestimates it.
+        """
+        return (self.forward_score + self.reverse_score) / 2.0
+
+    @property
+    def delta(self) -> float:
+        """`|x -> y  -  y -> x|` (R008)."""
+        return abs(self.forward_score - self.reverse_score)
+
+
+def compute_lis(
+    pair: ChainPairPAE,
+    lis_cutoff: float = LIS_CUTOFF,
+) -> LISResult:
+    """
+    LIS (Kim 2024) as `ipsae.py` computes it.
+
+    Per direction, take every inter-chain pair with `PAE < 12`, rescale it to
+    `(12 - PAE) / 12`, and average (`ipsae_v4.py:712-718`). The reported value is
+    the **mean** of the two directions (`ipsae_v4.py:982`), not the max.
+
+    Args:
+        pair:       The ordered chain pair's PAE quadrants.
+        lis_cutoff: PAE cutoff, tested strictly. Hardcoded to 12 in `ipsae.py`
+                    and independent of `PAE_CUTOFF`: Kim 2024 chose 12 as the
+                    value maximising AUC, and the published LIS threshold is only
+                    valid at that cutoff. Changing it invalidates the threshold.
+
+    Returns:
+        A `LISResult` carrying both directions.
+
+    Note:
+        A direction with no sub-cutoff pair scores `0.0` (`ipsae_v4.py:717-720`).
+        Unlike pDockQ and pDockQ2 this needs no R006 decision: `ipsae.py` and the
+        published implementation agree on `0.0` here.
+
+    Example
+    -------
+    >>> block_xy = np.array([[0.0, 24.0], [6.0, 24.0]], dtype=np.float32)
+    >>> block_yx = np.array([[12.0, 24.0], [24.0, 24.0]], dtype=np.float32)
+    >>> pair = ChainPairPAE('A', 'B', block_xy, block_yx,
+    ...                     np.zeros((2, 2), dtype=np.float32),
+    ...                     np.zeros((2, 2), dtype=np.float32))
+    >>> result = compute_lis(pair)
+
+    Forward keeps PAE 0.0 and 6.0 -> 1.0 and 0.5; reverse keeps nothing, because
+    the cutoff is strict and 12.0 is not below 12.0:
+
+    >>> result.forward.score, result.forward.n_valid_pairs
+    (0.75, 2)
+    >>> result.reverse.score, result.reverse.n_valid_pairs
+    (0.0, 0)
+    >>> result.score            # the MEAN, not the max
+    0.375
+    >>> result.delta
+    0.75
+    """
+
+    def _direction(block: np.ndarray, row_chain: str, col_chain: str) -> LISDirection:
+        values = block.astype(np.float64).ravel()
+        valid = values[values < lis_cutoff]
+        score = float(((lis_cutoff - valid) / lis_cutoff).mean()) if valid.size else 0.0
+        return LISDirection(
+            chain_row=row_chain,
+            chain_col=col_chain,
+            score=score,
+            n_valid_pairs=int(valid.size),
+            n_pairs=int(values.size),
+        )
+
+    return LISResult(
+        chain_x=pair.chain_x,
+        chain_y=pair.chain_y,
+        forward=_direction(pair.block_xy, pair.chain_x, pair.chain_y),
+        reverse=_direction(pair.block_yx, pair.chain_y, pair.chain_x),
+        lis_cutoff=float(lis_cutoff),
+    )
+
+
+# --- directional transparency (R008) ---------------------------------------
+# Six of the seven values are computed per direction and reported as one number.
+# Collapsing them silently is exactly what let R003 and R007 survive; these two
+# objects make the collapse visible so a later task can display it.
+
+DIRECTIONAL_DELTA_TOLERANCE: float = 0.05
+"""Provisional flag threshold for `|x->y - y->x|`.
+
+A directional difference is normal and is not an error -- PAE is asymmetric by
+construction. This is the point past which the difference is large enough that a
+reader should be told which direction they are looking at. R008 owns the final
+value and the wording that goes with it.
+"""
+
+
+@dataclass(frozen=True)
+class DirectionalDelta:
+    """
+    One score's directional summary: both directions, the reported value, the gap.
+
+    Attributes:
+        name:      Key into `THRESHOLDS`.
+        directional: `False` only for pDockQ, which is provably symmetric.
+        combine:   How the two directions become the reported value: `'max'`,
+                   `'mean'`, or `'symmetric'` when there is nothing to combine.
+        score:     The reported value.
+        forward:   The `x -> y` value, or `None` when not directional.
+        reverse:   The `y -> x` value, or `None` when not directional.
+        tolerance: The threshold `flagged` compares `delta` against.
+
+    Example
+    -------
+    >>> row = DirectionalDelta('lis', True, 'mean', 0.6004, 0.6088, 0.5921)
+    >>> round(row.delta, 4), row.flagged
+    (0.0167, False)
+    >>> DirectionalDelta('pdockq', False, 'symmetric', 0.1452).delta is None
+    True
+    """
+
+    name: str
+    directional: bool
+    combine: str
+    score: float
+    forward: Optional[float] = None
+    reverse: Optional[float] = None
+    tolerance: float = DIRECTIONAL_DELTA_TOLERANCE
+
+    @property
+    def delta(self) -> Optional[float]:
+        """`|forward - reverse|`, or `None` for a symmetric score.
+
+        `None` rather than `0.0` deliberately: pDockQ has no directional
+        difference to show, and printing a zero would suggest it was measured.
+        """
+        if not self.directional or self.forward is None or self.reverse is None:
+            return None
+        return abs(self.forward - self.reverse)
+
+    @property
+    def flagged(self) -> bool:
+        """Whether `delta` exceeds `tolerance`. Always `False` when symmetric."""
+        delta = self.delta
+        return delta is not None and delta > self.tolerance
+
+
+def directional_deltas(
+    iptm_d0chn: Optional[DirectionalPair] = None,
+    ipsae: Optional[IPSAEResult] = None,
+    pdockq: Optional[PDockQResult] = None,
+    pdockq2: Optional[PDockQ2Result] = None,
+    lis: Optional[LISResult] = None,
+    tolerance: float = DIRECTIONAL_DELTA_TOLERANCE,
+) -> List[DirectionalDelta]:
+    """
+    Per-score directional summary for every result handed in (R008).
+
+    Args:
+        iptm_d0chn: From `compute_iptm_d0chn`.
+        ipsae:      From `compute_ipsae`; contributes all three variants.
+        pdockq:     From `compute_pdockq`; reported as symmetric, never diffed.
+        pdockq2:    From `compute_pdockq2`.
+        lis:        From `compute_lis`.
+        tolerance:  Passed through to each row's `flagged`.
+
+    Returns:
+        One `DirectionalDelta` per supplied score, in the notebook's reporting
+        order: ipTM_d0chn, the three ipSAE variants, pDockQ, pDockQ2, LIS.
+        Arguments left `None` contribute no row.
+
+    Example
+    -------
+    >>> f = ResidueProfile('A', 'B', np.array([0.4, 0.9]), np.full(2, 6.0),
+    ...                    np.full(2, 300), np.array([5, 7]))
+    >>> r = ResidueProfile('B', 'A', np.array([0.7, 0.3]), np.full(2, 6.0),
+    ...                    np.full(2, 300), np.array([6, 2]))
+    >>> rows = directional_deltas(iptm_d0chn=DirectionalPair('iptm_d0chn', 'A', 'B', f, r))
+    >>> [(row.name, row.combine, round(row.delta, 6), row.flagged) for row in rows]
+    [('iptm_d0chn', 'max', 0.2, True)]
+    """
+    rows: List[DirectionalDelta] = []
+
+    def _add_pair(pair: DirectionalPair) -> None:
+        rows.append(
+            DirectionalDelta(
+                name=pair.name,
+                directional=True,
+                combine="max",
+                score=pair.score,
+                forward=pair.forward_score,
+                reverse=pair.reverse_score,
+                tolerance=tolerance,
+            )
+        )
+
+    if iptm_d0chn is not None:
+        _add_pair(iptm_d0chn)
+    if ipsae is not None:
+        for variant in ("ipsae_d0res", "ipsae_d0chn", "ipsae_d0dom"):
+            _add_pair(ipsae.variants[variant])
+    if pdockq is not None:
+        # Not diffed: `npairs` and the interface residue set are invariant under
+        # swapping the chains, so there is no second direction to compare.
+        rows.append(
+            DirectionalDelta(
+                name="pdockq",
+                directional=False,
+                combine="symmetric",
+                score=pdockq.score,
+                tolerance=tolerance,
+            )
+        )
+    if pdockq2 is not None:
+        rows.append(
+            DirectionalDelta(
+                name="pdockq2",
+                directional=True,
+                combine="max",
+                score=pdockq2.score,
+                forward=pdockq2.forward_score,
+                reverse=pdockq2.reverse_score,
+                tolerance=tolerance,
+            )
+        )
+    if lis is not None:
+        rows.append(
+            DirectionalDelta(
+                name="lis",
+                directional=True,
+                combine="mean",
+                score=lis.score,
+                forward=lis.forward_score,
+                reverse=lis.reverse_score,
+                tolerance=tolerance,
+            )
+        )
+    return rows
 
 
 # ---------------------------------------------------------------------------
