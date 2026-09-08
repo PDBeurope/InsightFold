@@ -194,9 +194,33 @@ useful thing to tell a notebook user than "the threshold is 0.6".
 homodimers and 7,561,477 heterodimers analysed; 1,735,475 (9.1%) and 79,392 (1.0%)
 high-confidence respectively; 1.81 million high-confidence assemblies in total.
 
+**Citation policy — decided with the user 2026-09-08.** Separate the *metric* from the
+*threshold*, and credit both.
+
+- **ipSAE the metric is Dunbrack's, and must be cited as his** wherever the score is
+  explained, defined or computed: Dunbrack, bioRxiv 2025.02.10.637595. Adopting a different
+  threshold does not diminish authorship of the method. The earlier finding that the paper
+  states no cutoff is a statement about *thresholds only*, and must never be presented as a
+  criticism of the work or as a reason to under-credit it.
+- **The 0.6 threshold is AFDB's**, cited to Han/Tsenkov et al. 2026. Do not attribute it to
+  Dunbrack, which is the error `CLAUDE.md` currently makes by placing it under a
+  DunbrackLab-attributed heading.
+- **The EBI news item is cited too**, despite predating the v2 preprint, as the accessible
+  entry point to the original work:
+  `https://www.ebi.ac.uk/about/news/technology-and-innovation/first-complexes-alphafold-database/`
+  Present it as background reading, with the preprint as the technical citation. Its 1.7M
+  figure covers high-confidence homodimers only, so do not use it for the scale numbers.
+- Same principle throughout: pDockQ cites Bryant, pDockQ2 cites Zhu, LIS cites Kim, and the
+  `ipsae.py` implementation cites DunbrackLab/IPSAE v4, regardless of whose threshold is used.
+
+**Confirmed for the notebook (user, 2026-09-08).** The conservative-not-optimal point is to be
+stated explicitly: 0.6 is a deliberately conservative operating point chosen to prioritise
+precision over recall at release scale, not an optimum. The MCC-optimal cutoffs on the paper's
+own benchmarks are 0.104 (homodimer) and 0.520 (heterodimer).
+
 **Done when.** `threshold-reference.md` and `THRESHOLDS` carry the AFDB bands and the joint
-rule, every changed number cites the preprint by page, and the conservative-not-optimal nuance
-is written down for R080 to surface.
+rule, every changed number cites the preprint by page, the metric-vs-threshold citation split
+is written down, and the conservative-not-optimal nuance is recorded for R080 to surface.
 
 ### `[ ] R008 — Surface directional asymmetry as a diagnostic`
 
@@ -281,6 +305,30 @@ Target: notebook code cells become orchestration and narrative only. Anything th
 reusable function moves out.
 
 ### `[x] R010 — Create the module and the Colab bootstrap` — DONE 2026-09-07
+### `[x] R010b — Fix the Colab bootstrap` — DONE 2026-09-08
+
+**Why this exists.** R010 was verified locally but not on Colab, and Colab was the path that
+mattered. The user ran it and it failed with a bare `ImportError`. Three defects, all real:
+
+1. **Branch pin.** The clone hardcoded `main`, which does not carry
+   `complex_interface_utils.py`. Now pinned to `homodimer-notebook-rework` behind a
+   `TODO(merge)` marker; R093 reverts it.
+2. **Stale clone.** An existing clone was reused without refreshing, so a checkout predating
+   the module kept failing even after the branch was pushed. Now fetches and hard-resets,
+   falls back to the existing checkout when offline, and moves a non-git directory aside
+   rather than deleting it.
+3. **Opaque failure.** The `ImportError` named no cause. It now reports repo root, revision in
+   use, branch expected, and the remedy.
+
+**Safety property, verified independently.** `git reset --hard` appears only inside
+`ensure_colab_clone()`, which has exactly one call site, guarded by
+`IN_COLAB and (REPO_ROOT is None or REPO_ROOT == COLAB_CLONE_DIR.resolve())` and passed only
+`COLAB_CLONE_DIR`. A locally discovered repo root can never be reset. A Colab user with their
+own checkout elsewhere is also left alone, because `REPO_ROOT` then matches neither arm.
+
+**Lesson recorded.** Verifying only the convenient environment is not verification. Any task
+whose deliverable runs in two environments must be exercised in both, or the untested one must
+be declared untested. See the amended verification protocol below.
 
 **What.** Create `src/insightfold/complex_interface_utils.py` (D7) with a clear section
 layout, and rewrite notebook cell 1 as the D9 clone-and-path bootstrap.
@@ -823,6 +871,13 @@ runs late so it covers text written by earlier milestones. M8's deletions run la
 cells against a live AFDB fetch; check the task's "done when"; for scoring tasks compare
 numerically against `references/ipsae_v4.py` on both fixtures. A failed task is re-issued to a
 fresh agent with the specific failure, not patched by the orchestrator.
+
+**Environment coverage.** A deliverable that runs both locally and on Colab must be verified
+in both, or the untested environment must be named as untested in the report. R010 passed
+local verification and shipped a Colab-breaking bug; the gap was the orchestrator's, not the
+agent's. Colab cannot be driven from here, so the standing substitute is: exercise the
+underlying functions against a simulated remote, and state plainly which paths were executed
+versus reasoned about.
 
 **Invariant — the notebook stays runnable after every single task.** M2 moves code out of the
 notebook into the module over seven tasks; at no point may the notebook be left in a state
