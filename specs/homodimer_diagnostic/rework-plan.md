@@ -142,7 +142,7 @@ reproduced independently against the live AFDB PAE endpoints and matched to thre
 5. pDockQ2's sigmoid is bounded on [0.005, **1.315**] and can exceed 1.0. It must never be
    presented as a probability or a percentage.
 
-### `[ ] R009 — Adopt the AFDB joint criterion and published confidence bands`
+### `[x] R009 — Adopt the AFDB joint criterion and published confidence bands` — DONE 2026-09-08
 
 **What.** Fold the AFDB preprint into `threshold-reference.md` and the module's `THRESHOLDS`,
 replacing invented numbers with AFDB's published scheme. Decided with the user 2026-09-08.
@@ -351,7 +351,7 @@ layout, and rewrite notebook cell 1 as the D9 clone-and-path bootstrap.
 - The `find_repo_root()` pattern is what lets one cell work unchanged locally and on Colab,
   which is the property worth preserving from the original.
 
-### `[ ] R011 — Move AFDB fetch and parsing into the module`
+### `[x] R011 — Move AFDB fetch and parsing into the module` — DONE 2026-09-08
 
 **Covers cells 5, 6, 7, 8, 9.** `fetch_metadata`, `download_structure`, `download_pae`,
 `download_plddt`, `parse_mmcif_atoms`, `extract_chain_coords`, `parse_pae`, `parse_plddt`.
@@ -420,19 +420,33 @@ currently hides the deprecation warnings we need to see (see R075).
 **What.** Cell 6 does `meta = entries[0]`. The AFDB prediction endpoint returns **one entry
 per chain**, and for the fixtures I checked **chain B comes first**.
 
-**Supporting notes.** Verified live:
+**Supporting notes — CORRECTED 2026-09-08. The entry order is non-deterministic.**
+
+The original note here recorded "chain B comes first", from two samples that both happened to
+return B first. That was an over-generalisation. Re-tested with repeated calls:
 
 ```
-GET /api/prediction/AF-0000000065889468  ->  2 entries, entries[0].chainId == 'B'
-GET /api/prediction/AF-0000000211034637  ->  2 entries, entries[0].chainId == 'B'
-                                             B = P63166 (101 aa), A = Q96AZ6 (181 aa)
+AF-0000000065889468  try1 ['A','B']   try2 ['A','B']   try3 ['B','A']
+AF-0000000211034637  try1 ['B','A']   try2 ['B','A']   try3 ['A','B']
 ```
 
-For a homodimer this is invisible. For a heterodimer, every field in the cell-10 report
-(sequence, gene, protein name, monomer length, UniProt ID) is currently chain B's while the
-report presents it as the entry's. Replace with `{entry['chainId']: entry for entry in entries}`
-and report per chain. `cifUrl` / `bcifUrl` / `paeDocUrl` / `plddtDocUrl` are identical across
-entries, so downloads are unaffected.
+**The same accession returns a different order on different calls.** So `meta = entries[0]` is
+not merely wrong, it is *non-deterministically* wrong: for a heterodimer, the sequence, gene,
+protein name, monomer length and UniProt ID shown in the cell-10 report can flip between chains
+on consecutive runs of the same notebook with the same input. For a homodimer it stays
+invisible, because both entries describe the same protein.
+
+Never code against either order. Select by `chainId` explicitly:
+`{entry['chainId']: entry for entry in entries}`, and report per chain. R011 already preserves
+all entries in `AFDBPrediction` with `entry_for_chain()`, so this task is the selection logic,
+not a rewrite.
+
+`cifUrl` / `bcifUrl` / `paeDocUrl` / `plddtDocUrl` are identical across entries on both
+fixtures, and `AFDBPrediction.document_url()` now enforces that agreement rather than assuming
+it, so a future per-chain document scheme fails loudly instead of mis-slicing silently.
+
+**This also strengthens the case for R008's directional diff:** a value that changes between
+runs of an unchanged notebook is the hardest class of bug to notice by eye.
 
 ### `[ ] R021 — Chain identity and labelling`
 
@@ -851,8 +865,8 @@ review.
 
 | # | Milestone | Tasks | n | Status |
 |---|-----------|-------|---|--------|
-| M1 | Ground truth (docs only, no code) | R001, R002, R009 | 3 | R001, R002 done; R009 added 2026-09-08 |
-| M2 | Module extracted, behaviour preserved | R010-R016 | 7 | |
+| M1 | Ground truth | R001, R002, R009 | 3 | **COMPLETE** 2026-09-08 |
+| M2 | Module extracted, behaviour preserved | R010, R010b, R011-R016 | 8 | R010, R010b, R011 done |
 | M3 | Heterodimer support | R020-R024 | 5 | |
 | M4 | Scoring correctness + Section 4 | R003-R008, R060-R062 | 9 | |
 | M5 | PAE visuals | R050-R052 | 3 | |

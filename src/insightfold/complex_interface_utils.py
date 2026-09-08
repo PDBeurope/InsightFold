@@ -80,25 +80,54 @@ package (D9).
 
 Status
 ------
-This file is being filled in over several tasks. Sections below carry a note
-naming the task that populates them. Only the genuinely shared primitives
-(the two `d0` helpers, `ptm_func`, the threshold table, the traffic light and the
-AFDB joint criterion) are implemented here, because everything else depends on
-them.
+This file is being filled in over several tasks; the sections still empty carry
+a note naming the task that populates them. Implemented so far: AFDB access,
+structure parsing, PAE / pLDDT parsing and interface detection (R011), the shared
+scoring primitives (the two `d0` helpers and `ptm_func`), and the threshold
+table with its traffic light and the AFDB joint criterion. Still to come: the
+score functions (R012), the plots (R013) and the MolViewSpec views (R014).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Literal, Tuple
+from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple
 
 import numpy as np
+import requests
 
 __all__ = [
     # constants
     "PAE_CUTOFF",
     "DIST_CUTOFF",
     "LIS_CUTOFF",
+    "AFDB_PREDICTION_URL",
+    "DEFAULT_TIMEOUT",
+    "BACKBONE_ATOMS",
+    # AFDB access
+    "AFDBPrediction",
+    "fetch_afdb_metadata",
+    "download_text",
+    "download_json",
+    "download_structure",
+    "download_pae",
+    "download_plddt",
+    # structure parsing
+    "ChainCoords",
+    "parse_mmcif_atoms",
+    "extract_chain_coords",
+    "parse_structure",
+    # PAE / pLDDT parsing
+    "ChainSpan",
+    "ChainPairPAE",
+    "PAEMatrix",
+    "parse_pae",
+    "PLDDTScores",
+    "parse_plddt",
+    "verify_chain_lengths",
+    # interface detection
+    "InterfaceContacts",
+    "detect_interface",
     # scoring primitives
     "d0_scalar",
     "d0_array",
@@ -157,37 +186,1048 @@ Tested strictly (`pae < LIS_CUTOFF`).
 
 
 # ---------------------------------------------------------------------------
-# AFDB access  --  filled by R011
+# AFDB access
 # ---------------------------------------------------------------------------
-# `fetch_metadata`, `download_structure`, `download_pae`, `download_plddt`.
-# Uses `requests` (not `urllib`): the PAE and pLDDT documents are served gzipped
-# and `requests` decompresses them transparently.
+# `requests`, not `urllib`: the PAE and pLDDT documents are served gzipped and
+# `requests` decompresses them transparently, while `urllib.request.urlopen`
+# hands back the raw deflate stream and `json.loads` then fails on byte 0x1f.
+
+AFDB_PREDICTION_URL: str = "https://alphafold.ebi.ac.uk/api/prediction/{accession}"
+"""AFDB prediction (metadata) endpoint. Returns a JSON array, one entry per chain."""
+
+DEFAULT_TIMEOUT: float = 60.0
+"""Seconds before a download is abandoned. Generous because Colab's egress is slow."""
+
+_SHARED_DOCUMENT_FIELDS: Tuple[str, ...] = ("cifUrl", "bcifUrl", "paeDocUrl", "plddtDocUrl")
+"""Metadata fields that address the *complex* and are therefore identical in
+every per-chain entry. Read through `AFDBPrediction.document_url`, which checks
+the agreement rather than assuming it."""
+
+
+@dataclass(frozen=True, eq=False)
+class AFDBPrediction:
+    """
+    The whole prediction-endpoint response, with every per-chain entry preserved.
+
+    The endpoint returns **one entry per chain**, and for the fixtures checked so
+    far `entries[0]` is chain *B*, not chain A. Collapsing to `entries[0]` is
+    therefore a real bug for heterodimers: it reports one chain's sequence, gene
+    and UniProt accession as if they were the complex's. This carrier exists so
+    that the fix is a change of *which entry a caller asks for*, not a rewrite of
+    the fetch path.
+
+    Attributes:
+        accession: The `AF-...` accession that was requested.
+        entries:   Every entry the endpoint returned, in API order.
+    """
+
+    accession: str
+    entries: Tuple[Dict[str, Any], ...]
+
+    @property
+    def chain_ids(self) -> Tuple[str, ...]:
+        """`chainId` of each entry, in API order (so typically `('B', 'A')`)."""
+        return tuple(str(entry.get("chainId", "")) for entry in self.entries)
+
+    def entry_for_chain(self, chain_id: str) -> Dict[str, Any]:
+        """
+        The metadata entry describing one chain.
+
+        Args:
+            chain_id: Structure chain label, e.g. `'A'`.
+
+        Returns:
+            That chain's entry.
+
+        Raises:
+            KeyError: If no entry carries that `chainId`.
+        """
+        for entry in self.entries:
+            if str(entry.get("chainId", "")) == chain_id:
+                return entry
+        raise KeyError(
+            f"No entry for chain {chain_id!r} in {self.accession}; "
+            f"available: {', '.join(self.chain_ids) or '(none)'}."
+        )
+
+    @property
+    def primary_entry(self) -> Dict[str, Any]:
+        """
+        The entry used for whole-complex display fields.
+
+        Note:
+            Currently the first entry, which reproduces the notebook's existing
+            behaviour exactly. That is wrong for heterodimers; see the TODO below.
+        """
+        # TODO(R020): per-chain selection goes here. Replace this with a lookup
+        # keyed on the chain being described -- `entry_for_chain(chain_id)` --
+        # and report sequence / geneNames / proteinFullName / uniprotAccession /
+        # monomer length once per chain instead of once per complex. The
+        # document URLs are unaffected: they are identical across entries.
+        if not self.entries:
+            raise ValueError(f"No prediction entries returned for {self.accession}.")
+        return self.entries[0]
+
+    def document_url(self, field: str) -> str:
+        """
+        A whole-complex document URL, checked for agreement across entries.
+
+        Args:
+            field: One of `'cifUrl'`, `'bcifUrl'`, `'paeDocUrl'`, `'plddtDocUrl'`.
+
+        Returns:
+            The URL.
+
+        Raises:
+            ValueError: If the entries disagree, which would mean the endpoint
+                serves per-chain documents and the whole download path needs
+                rethinking. Better to fail loudly than to silently download one
+                chain's document and slice it as if it covered the complex.
+            KeyError: If the field is absent from every entry.
+        """
+        values = {entry[field] for entry in self.entries if entry.get(field)}
+        if not values:
+            raise KeyError(f"{field!r} is absent from every entry of {self.accession}.")
+        if len(values) > 1:
+            raise ValueError(
+                f"{field!r} differs between chains of {self.accession}: {sorted(values)}. "
+                "Whole-complex documents were assumed identical across entries."
+            )
+        return str(values.pop())
+
+    @property
+    def cif_url(self) -> str:
+        """mmCIF download URL (coordinates)."""
+        return self.document_url("cifUrl")
+
+    @property
+    def bcif_url(self) -> str:
+        """BinaryCIF download URL (MolViewSpec only; never parsed here)."""
+        return self.document_url("bcifUrl")
+
+    @property
+    def pae_url(self) -> str:
+        """PAE JSON download URL."""
+        return self.document_url("paeDocUrl")
+
+    @property
+    def plddt_url(self) -> str:
+        """pLDDT JSON download URL."""
+        return self.document_url("plddtDocUrl")
+
+
+def download_text(url: str, timeout: float = DEFAULT_TIMEOUT) -> str:
+    """
+    GET a URL and return its decoded body.
+
+    Args:
+        url:     Absolute URL.
+        timeout: Seconds.
+
+    Returns:
+        The response body as text.
+
+    Raises:
+        requests.HTTPError: On a non-2xx status.
+    """
+    response = requests.get(url, timeout=timeout)
+    response.raise_for_status()
+    return response.text
+
+
+def download_json(url: str, timeout: float = DEFAULT_TIMEOUT) -> Any:
+    """
+    GET a URL and parse its body as JSON.
+
+    Used for the PAE and pLDDT documents, which AFDB serves gzip-encoded;
+    `requests` decompresses them transparently on the basis of the
+    `Content-Encoding` header, which is why this module does not use `urllib`.
+
+    Args:
+        url:     Absolute URL.
+        timeout: Seconds.
+
+    Returns:
+        The parsed JSON: an array for PAE, an object for pLDDT.
+
+    Raises:
+        requests.HTTPError: On a non-2xx status.
+    """
+    response = requests.get(url, timeout=timeout)
+    response.raise_for_status()
+    return response.json()
+
+
+def fetch_afdb_metadata(accession: str, timeout: float = DEFAULT_TIMEOUT) -> AFDBPrediction:
+    """
+    Fetch the AFDB prediction metadata for one accession.
+
+    Args:
+        accession: An AFDB accession such as `'AF-0000000065889468'`.
+        timeout:   Seconds.
+
+    Returns:
+        An `AFDBPrediction` holding *all* per-chain entries.
+
+    Raises:
+        ValueError:         If the endpoint returns an empty array, i.e. the
+                            accession does not exist.
+        requests.HTTPError: On a non-2xx status.
+    """
+    payload = download_json(AFDB_PREDICTION_URL.format(accession=accession), timeout=timeout)
+    entries = payload if isinstance(payload, list) else [payload]
+    if not entries:
+        raise ValueError(f"No AFDB prediction found for {accession!r}.")
+    return AFDBPrediction(accession=accession, entries=tuple(entries))
+
+
+def download_structure(prediction: AFDBPrediction, timeout: float = DEFAULT_TIMEOUT) -> str:
+    """Download the mmCIF text for a prediction. See `download_text`."""
+    return download_text(prediction.cif_url, timeout=timeout)
+
+
+def download_pae(prediction: AFDBPrediction, timeout: float = DEFAULT_TIMEOUT) -> Any:
+    """Download the raw PAE JSON for a prediction. Feed it to `parse_pae`."""
+    return download_json(prediction.pae_url, timeout=timeout)
+
+
+def download_plddt(prediction: AFDBPrediction, timeout: float = DEFAULT_TIMEOUT) -> Any:
+    """Download the raw pLDDT JSON for a prediction. Feed it to `parse_plddt`."""
+    return download_json(prediction.plddt_url, timeout=timeout)
 
 
 # ---------------------------------------------------------------------------
-# Structure parsing  --  filled by R011
+# Structure parsing
 # ---------------------------------------------------------------------------
-# `parse_mmcif_atoms`, `extract_chain_coords`. One column-naming convention for
-# the `_atom_site.` prefix, chosen here and used everywhere (see R015, which
-# absorbs the three divergent copies of `extract_cb_coords`).
+# Column-naming convention, chosen once here and used everywhere (R015 folds the
+# three divergent copies of this parser into this one): keys in `col_idx` have
+# the `_atom_site.` prefix **stripped** and are **lower-cased**, so the mmCIF's
+# `_atom_site.B_iso_or_equiv` is looked up as `'b_iso_or_equiv'`. Lower-casing
+# is what makes the choice safe rather than merely a coin flip -- mmCIF tags are
+# case-insensitive by specification, and the AFDB files mix cases within one
+# loop (`group_PDB`, `Cartn_x`, `label_seq_id`).
+
+_ATOM_SITE_PREFIX = "_atom_site."
+
+_REQUIRED_ATOM_SITE_COLUMNS: Tuple[str, ...] = (
+    "group_pdb",
+    "label_atom_id",
+    "label_asym_id",
+    "label_seq_id",
+    "label_comp_id",
+    "cartn_x",
+    "cartn_y",
+    "cartn_z",
+    "b_iso_or_equiv",
+)
+"""The columns every downstream computation needs. `pdbx_pdb_model_num` is
+optional and filtered on only when present."""
+
+BACKBONE_ATOMS: Tuple[str, str] = ("CA", "CB")
+"""The only atoms retained. CB defines a contact; CA is the substitute for
+glycine, which has no CB."""
+
+
+@dataclass(eq=False)
+class ChainCoords:
+    """
+    One chain's per-residue coordinates and confidence, sorted by residue number.
+
+    Every array is parallel and has length `n_residues`, so a boolean interface
+    mask indexes all four consistently.
+
+    Attributes:
+        chain_id:  `label_asym_id`, e.g. `'A'`.
+        coords:    `(N, 3)` float32. CB, or CA where the residue has no CB.
+        res_ids:   `(N,)` int32, `label_seq_id` values (1-based).
+        res_names: `(N,)` str, three-letter residue codes.
+        plddt:     `(N,)` float32, from the `B_iso_or_equiv` column, which AFDB
+                   repurposes to carry pLDDT.
+    """
+
+    chain_id: str
+    coords: np.ndarray
+    res_ids: np.ndarray
+    res_names: np.ndarray
+    plddt: np.ndarray
+
+    @property
+    def n_residues(self) -> int:
+        """Number of residues carried, i.e. the chain length as parsed."""
+        return int(self.coords.shape[0])
+
+    def __len__(self) -> int:
+        return self.n_residues
+
+
+def parse_mmcif_atoms(cif_text: str) -> Tuple[List[List[str]], Dict[str, int]]:
+    """
+    Tokenise the `_atom_site` loop of an mmCIF file. No BioPython, no gemmi.
+
+    Column indices are built from the loop header rather than hard-coded, so the
+    parser is agnostic to column order and to AFDB mmCIF version differences.
+
+    Args:
+        cif_text: The full text of an mmCIF file.
+
+    Returns:
+        `(records, col_idx)`. `records` is one token list per atom line;
+        `col_idx` maps a lower-cased, prefix-stripped column name to its position
+        within a record.
+
+    Raises:
+        ValueError: If the file contains no `_atom_site` loop.
+
+    Example
+    -------
+    >>> cif = '''loop_
+    ... _atom_site.group_PDB
+    ... _atom_site.label_atom_id
+    ... _atom_site.label_asym_id
+    ... _atom_site.label_seq_id
+    ... _atom_site.label_comp_id
+    ... _atom_site.Cartn_x
+    ... _atom_site.Cartn_y
+    ... _atom_site.Cartn_z
+    ... _atom_site.B_iso_or_equiv
+    ... ATOM CA A 1 GLY 0.0 0.0 0.0 90.0
+    ... ATOM CA A 2 ALA 4.0 0.0 0.0 80.0
+    ... ATOM CB A 2 ALA 5.0 0.0 0.0 80.0
+    ... #
+    ... '''
+    >>> records, col_idx = parse_mmcif_atoms(cif)
+    >>> len(records)
+    3
+    >>> sorted(col_idx)[:3]
+    ['b_iso_or_equiv', 'cartn_x', 'cartn_y']
+    >>> records[0][col_idx['label_comp_id']]
+    'GLY'
+    """
+    lines = cif_text.splitlines()
+    n_lines = len(lines)
+
+    headers: List[str] = []
+    row_start: int | None = None
+
+    index = 0
+    while index < n_lines:
+        if lines[index].strip().lower() != "loop_":
+            index += 1
+            continue
+
+        cursor = index + 1
+        candidate: List[str] = []
+        while cursor < n_lines and lines[cursor].strip().startswith("_"):
+            candidate.append(lines[cursor].strip())
+            cursor += 1
+        if candidate and candidate[0].lower().startswith(_ATOM_SITE_PREFIX):
+            headers = candidate
+            row_start = cursor
+            break
+        index = cursor if cursor > index else index + 1
+
+    if row_start is None:
+        raise ValueError("No _atom_site loop found in the mmCIF text.")
+
+    col_idx = {
+        header.lower()[len(_ATOM_SITE_PREFIX):].strip(): position
+        for position, header in enumerate(headers)
+    }
+    n_cols = len(headers)
+
+    records: List[List[str]] = []
+    cursor = row_start
+    while cursor < n_lines:
+        stripped = lines[cursor].strip()
+        if not stripped:
+            cursor += 1
+            continue
+        if stripped.startswith("#"):
+            break
+        if stripped.startswith("_") or stripped.lower() == "loop_":
+            break
+        tokens = stripped.split()
+        if len(tokens) >= n_cols:
+            records.append(tokens[:n_cols])
+        cursor += 1
+
+    return records, col_idx
+
+
+def extract_chain_coords(
+    records: List[List[str]],
+    col_idx: Dict[str, int],
+) -> Dict[str, ChainCoords]:
+    """
+    Build per-chain `ChainCoords` from tokenised `_atom_site` records.
+
+    CB is the contact atom; glycine has none, so its CA is substituted. A CB
+    record always wins over a CA record for the same residue regardless of the
+    order they appear in the file.
+
+    Filtering, matching `ipsae.py`'s own atom selection:
+
+    - `group_PDB == 'ATOM'` (HETATM, including any ligand or water, is dropped);
+    - `label_atom_id` in `('CA', 'CB')`;
+    - `label_seq_id` of `'.'` or `'?'`, or any non-integer, is skipped;
+    - `pdbx_PDB_model_num == '1'` when that column exists, so an NMR-style
+      multi-model file contributes only its first model.
+
+    Args:
+        records: From `parse_mmcif_atoms`.
+        col_idx: From `parse_mmcif_atoms` (lower-cased, prefix-stripped keys).
+
+    Returns:
+        `{chain_id: ChainCoords}`, each chain's residues sorted by `label_seq_id`.
+
+    Raises:
+        ValueError: If a required `_atom_site` column is missing.
+
+    Example
+    -------
+    >>> cif = '''loop_
+    ... _atom_site.group_PDB
+    ... _atom_site.label_atom_id
+    ... _atom_site.label_asym_id
+    ... _atom_site.label_seq_id
+    ... _atom_site.label_comp_id
+    ... _atom_site.Cartn_x
+    ... _atom_site.Cartn_y
+    ... _atom_site.Cartn_z
+    ... _atom_site.B_iso_or_equiv
+    ... ATOM CA A 1 GLY 0.0 0.0 0.0 90.0
+    ... ATOM CA A 2 ALA 4.0 0.0 0.0 80.0
+    ... ATOM CB A 2 ALA 5.0 0.0 0.0 80.0
+    ... HETATM CA A 3 HOH 9.0 0.0 0.0 50.0
+    ... '''
+    >>> chains = extract_chain_coords(*parse_mmcif_atoms(cif))
+    >>> sorted(chains)
+    ['A']
+    >>> chains['A'].res_names.tolist()
+    ['GLY', 'ALA']
+    >>> chains['A'].coords[:, 0].tolist()
+    [0.0, 5.0]
+    """
+    missing = [name for name in _REQUIRED_ATOM_SITE_COLUMNS if name not in col_idx]
+    if missing:
+        raise ValueError(
+            "mmCIF _atom_site loop is missing required column(s): "
+            + ", ".join(missing)
+        )
+
+    ix_group = col_idx["group_pdb"]
+    ix_atom = col_idx["label_atom_id"]
+    ix_chain = col_idx["label_asym_id"]
+    ix_seq = col_idx["label_seq_id"]
+    ix_comp = col_idx["label_comp_id"]
+    ix_x = col_idx["cartn_x"]
+    ix_y = col_idx["cartn_y"]
+    ix_z = col_idx["cartn_z"]
+    ix_plddt = col_idx["b_iso_or_equiv"]
+    ix_model = col_idx.get("pdbx_pdb_model_num")
+
+    # chain_id -> res_id -> (atom_id, res_name, x, y, z, plddt)
+    per_chain: Dict[str, Dict[int, Tuple[str, str, float, float, float, float]]] = {}
+
+    for tokens in records:
+        if tokens[ix_group] != "ATOM":
+            continue
+        if ix_model is not None and tokens[ix_model] != "1":
+            continue
+        atom_id = tokens[ix_atom]
+        if atom_id not in BACKBONE_ATOMS:
+            continue
+        seq_token = tokens[ix_seq]
+        if seq_token in (".", "?") or not seq_token.lstrip("-").isdigit():
+            continue
+        try:
+            x, y, z = float(tokens[ix_x]), float(tokens[ix_y]), float(tokens[ix_z])
+            plddt = float(tokens[ix_plddt])
+        except ValueError:
+            continue
+
+        residues = per_chain.setdefault(tokens[ix_chain], {})
+        res_id = int(seq_token)
+        existing = residues.get(res_id)
+        # CB wins over CA for the same residue, whichever order they appear in.
+        if existing is None or (atom_id == "CB" and existing[0] == "CA"):
+            residues[res_id] = (atom_id, tokens[ix_comp], x, y, z, plddt)
+
+    chains: Dict[str, ChainCoords] = {}
+    for chain_id, residues in per_chain.items():
+        order = sorted(residues)
+        chains[chain_id] = ChainCoords(
+            chain_id=chain_id,
+            coords=np.array([residues[r][2:5] for r in order], dtype=np.float32).reshape(-1, 3),
+            res_ids=np.array(order, dtype=np.int32),
+            res_names=np.array([residues[r][1] for r in order], dtype="<U3"),
+            plddt=np.array([residues[r][5] for r in order], dtype=np.float32),
+        )
+    return chains
+
+
+def parse_structure(cif_text: str) -> Dict[str, ChainCoords]:
+    """
+    `parse_mmcif_atoms` then `extract_chain_coords`, for the common case.
+
+    Args:
+        cif_text: The full text of an mmCIF file.
+
+    Returns:
+        `{chain_id: ChainCoords}`.
+    """
+    return extract_chain_coords(*parse_mmcif_atoms(cif_text))
 
 
 # ---------------------------------------------------------------------------
-# PAE / pLDDT parsing  --  filled by R011
+# PAE / pLDDT parsing
 # ---------------------------------------------------------------------------
-# `parse_pae`, `parse_plddt`, and the ordered-chain-pair quadrant extraction that
-# D4 makes explicit. Chain lengths derived here must be asserted equal to the
-# structure-derived lengths rather than silently mis-slicing (R021).
+# Both documents carry a `chains` array giving each chain's span in the
+# concatenated complex; both are parsed into the same `ChainSpan` records so the
+# two agree by construction. D4's ordered chain pair is made explicit here:
+# `PAEMatrix.ordered_pair(x, y)` is the only supported way to get the four
+# quadrants, and it always names which chain is rows and which is columns,
+# because PAE is asymmetric and `block_xy != block_yx.T`.
+
+
+@dataclass(frozen=True)
+class ChainSpan:
+    """
+    One chain's residue span within a concatenated complex document.
+
+    Attributes:
+        chain_id: `label_asym_id`, e.g. `'A'`.
+        start:    `sequenceStart`, 1-based inclusive.
+        end:      `sequenceEnd`, inclusive.
+        name:     The document's `name` field where present, `''` otherwise.
+                  Used for real protein labels instead of "Chain A" (R021).
+
+    Example
+    -------
+    >>> ChainSpan('A', 1, 172).length
+    172
+    """
+
+    chain_id: str
+    start: int
+    end: int
+    name: str = ""
+
+    @property
+    def length(self) -> int:
+        """Number of residues spanned, inclusive of both ends."""
+        return self.end - self.start + 1
+
+
+def _chain_spans(
+    entries: Any,
+    fallback_lengths: Optional[Mapping[str, int]] = None,
+) -> Tuple[ChainSpan, ...]:
+    """
+    Build sorted `ChainSpan`s from a document's `chains` array.
+
+    Sorting by `label_asym_id` is what makes the slicing deterministic: the
+    concatenated matrix is laid out in chain-label order, and the document's own
+    array order is not guaranteed.
+
+    Args:
+        entries:          The document's `chains` array; may be empty or absent.
+        fallback_lengths: `{chain_id: n_residues}`, normally structure-derived,
+                          used when the document omits `chains` entirely.
+
+    Returns:
+        Spans sorted by chain id.
+
+    Raises:
+        ValueError: If neither a `chains` array nor a fallback is available.
+    """
+    if entries:
+        spans = [
+            ChainSpan(
+                chain_id=str(entry["label_asym_id"]),
+                start=int(entry["sequenceStart"]),
+                end=int(entry["sequenceEnd"]),
+                name=str(entry.get("name", "") or ""),
+            )
+            for entry in entries
+        ]
+        return tuple(sorted(spans, key=lambda span: span.chain_id))
+    if fallback_lengths:
+        return tuple(
+            ChainSpan(chain_id=chain_id, start=1, end=int(fallback_lengths[chain_id]))
+            for chain_id in sorted(fallback_lengths)
+        )
+    raise ValueError(
+        "Document has no 'chains' array and no fallback chain lengths were given."
+    )
+
+
+@dataclass(frozen=True, eq=False)
+class ChainPairPAE:
+    """
+    The four PAE quadrants of one **ordered** chain pair, `(x, y)`.
+
+    PAE is asymmetric: `PAE[i][j]` is the error on residue `j` when the structure
+    is aligned on residue `i`, so `block_xy` and `block_yx` are genuinely
+    different measurements rather than transposes of one another. Every score
+    that reports a `max` over both directions consumes exactly these two blocks.
+
+    Attributes:
+        chain_x:  Chain id used for the rows of `block_xy`.
+        chain_y:  Chain id used for the columns of `block_xy`.
+        block_xy: `(nx, ny)` inter-chain PAE, aligned on `chain_x`.
+        block_yx: `(ny, nx)` inter-chain PAE, aligned on `chain_y`.
+        block_xx: `(nx, nx)` intra-chain PAE for `chain_x`.
+        block_yy: `(ny, ny)` intra-chain PAE for `chain_y`.
+    """
+
+    chain_x: str
+    chain_y: str
+    block_xy: np.ndarray
+    block_yx: np.ndarray
+    block_xx: np.ndarray
+    block_yy: np.ndarray
+
+    @property
+    def nx(self) -> int:
+        """Residue count of `chain_x`."""
+        return int(self.block_xy.shape[0])
+
+    @property
+    def ny(self) -> int:
+        """Residue count of `chain_y`."""
+        return int(self.block_xy.shape[1])
+
+
+@dataclass(frozen=True, eq=False)
+class PAEMatrix:
+    """
+    A parsed PAE document.
+
+    Attributes:
+        matrix:  `(L, L)` float32, `L` being the total residue count.
+        max_pae: `max_predicted_aligned_error`, the natural `vmax` for a heatmap.
+        spans:   Per-chain spans, sorted by chain id, in matrix layout order.
+    """
+
+    matrix: np.ndarray
+    max_pae: float
+    spans: Tuple[ChainSpan, ...]
+
+    @property
+    def chain_ids(self) -> Tuple[str, ...]:
+        """Chain ids in matrix layout order (sorted)."""
+        return tuple(span.chain_id for span in self.spans)
+
+    @property
+    def chain_lengths(self) -> Dict[str, int]:
+        """`{chain_id: n_residues}` as derived from the PAE document."""
+        return {span.chain_id: span.length for span in self.spans}
+
+    def chain_length(self, chain_id: str) -> int:
+        """Residue count of one chain. Raises `KeyError` if it is unknown."""
+        return self.chain_lengths[chain_id]
+
+    def chain_slice(self, chain_id: str) -> slice:
+        """
+        The half-open row/column range one chain occupies in `matrix`.
+
+        Args:
+            chain_id: Chain id.
+
+        Returns:
+            A `slice` usable on either axis.
+
+        Raises:
+            KeyError: If the chain is not in the document.
+        """
+        offset = 0
+        for span in self.spans:
+            if span.chain_id == chain_id:
+                return slice(offset, offset + span.length)
+            offset += span.length
+        raise KeyError(
+            f"Chain {chain_id!r} is not in the PAE document; "
+            f"available: {', '.join(self.chain_ids)}."
+        )
+
+    def block(self, row_chain: str, col_chain: str) -> np.ndarray:
+        """
+        One sub-block of the matrix, rows aligned on `row_chain`.
+
+        Args:
+            row_chain: Chain supplying the rows (the alignment frame).
+            col_chain: Chain supplying the columns.
+
+        Returns:
+            A `(n_row, n_col)` view into `matrix`.
+        """
+        return self.matrix[self.chain_slice(row_chain), self.chain_slice(col_chain)]
+
+    def ordered_pair(self, chain_x: str, chain_y: str) -> ChainPairPAE:
+        """
+        The four quadrants of an ordered chain pair (D4).
+
+        Args:
+            chain_x: Chain treated as "first"; rows of `block_xy`.
+            chain_y: Chain treated as "second"; columns of `block_xy`.
+
+        Returns:
+            A `ChainPairPAE`.
+
+        Raises:
+            KeyError:   If either chain is absent.
+            ValueError: If the two chain ids are the same, which would make the
+                        "inter-chain" blocks intra-chain and silently wrong.
+        """
+        if chain_x == chain_y:
+            raise ValueError(
+                f"An ordered chain pair needs two distinct chains, got {chain_x!r} twice."
+            )
+        return ChainPairPAE(
+            chain_x=chain_x,
+            chain_y=chain_y,
+            block_xy=self.block(chain_x, chain_y),
+            block_yx=self.block(chain_y, chain_x),
+            block_xx=self.block(chain_x, chain_x),
+            block_yy=self.block(chain_y, chain_y),
+        )
+
+
+def parse_pae(
+    pae_json: Any,
+    fallback_lengths: Optional[Mapping[str, int]] = None,
+) -> PAEMatrix:
+    """
+    Parse an AFDB PAE document.
+
+    The document is a JSON array whose single element holds
+    `predicted_aligned_error`, `max_predicted_aligned_error` and `chains`.
+
+    Args:
+        pae_json:         The parsed document (array, or the bare object).
+        fallback_lengths: `{chain_id: n_residues}` used only when the document
+                          omits `chains`; normally the structure-derived lengths.
+
+    Returns:
+        A `PAEMatrix`.
+
+    Raises:
+        ValueError: If the document is empty, if the matrix is not square, or if
+            the chain spans do not account for exactly the matrix's extent --
+            any of which would make every quadrant slice silently misaligned.
+
+    Example
+    -------
+    >>> doc = [{'predicted_aligned_error': [[0.0, 5.0, 9.0],
+    ...                                     [5.0, 0.0, 8.0],
+    ...                                     [9.0, 8.0, 0.0]],
+    ...         'max_predicted_aligned_error': 9.0,
+    ...         'chains': [{'label_asym_id': 'B', 'sequenceStart': 1, 'sequenceEnd': 1},
+    ...                    {'label_asym_id': 'A', 'sequenceStart': 1, 'sequenceEnd': 2}]}]
+    >>> pae = parse_pae(doc)
+    >>> pae.chain_ids
+    ('A', 'B')
+    >>> pae.chain_length('A'), pae.chain_length('B')
+    (2, 1)
+    >>> pair = pae.ordered_pair('A', 'B')
+    >>> pair.block_xy.shape, pair.block_yx.shape
+    ((2, 1), (1, 2))
+    >>> pair.block_xy.ravel().tolist()
+    [9.0, 8.0]
+    """
+    entry = pae_json[0] if isinstance(pae_json, list) else pae_json
+    if not entry:
+        raise ValueError("PAE document is empty.")
+
+    matrix = np.array(entry["predicted_aligned_error"], dtype=np.float32)
+    if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+        raise ValueError(f"PAE matrix must be square, got shape {matrix.shape}.")
+
+    spans = _chain_spans(entry.get("chains", []), fallback_lengths)
+    total = sum(span.length for span in spans)
+    if total != matrix.shape[0]:
+        raise ValueError(
+            f"PAE chain spans total {total} residues but the matrix is "
+            f"{matrix.shape[0]}x{matrix.shape[0]}."
+        )
+
+    return PAEMatrix(
+        matrix=matrix,
+        max_pae=float(entry.get("max_predicted_aligned_error", 31.75)),
+        spans=spans,
+    )
+
+
+@dataclass(frozen=True, eq=False)
+class PLDDTScores:
+    """
+    A parsed AFDB pLDDT document, sliced per chain on demand.
+
+    Attributes:
+        scores:          `(L,)` float32, in complex order.
+        residue_numbers: `(L,)` int32, the document's `residueNumber` column.
+        spans:           Per-chain spans, sorted by chain id, in document order.
+
+    Note:
+        `ChainCoords.plddt` carries the same numbers, read from the mmCIF
+        B-factor column. This class exists because the JSON document is also
+        available when only PAE-side work is being done, and because AFDB's
+        `confidenceCategory` bands are attached to it rather than to the mmCIF.
+    """
+
+    scores: np.ndarray
+    residue_numbers: np.ndarray
+    spans: Tuple[ChainSpan, ...]
+
+    @property
+    def chain_ids(self) -> Tuple[str, ...]:
+        """Chain ids in document layout order (sorted)."""
+        return tuple(span.chain_id for span in self.spans)
+
+    def chain_slice(self, chain_id: str) -> slice:
+        """The half-open range one chain occupies in `scores`."""
+        offset = 0
+        for span in self.spans:
+            if span.chain_id == chain_id:
+                return slice(offset, offset + span.length)
+            offset += span.length
+        raise KeyError(
+            f"Chain {chain_id!r} is not in the pLDDT document; "
+            f"available: {', '.join(self.chain_ids)}."
+        )
+
+    def for_chain(self, chain_id: str) -> np.ndarray:
+        """
+        One chain's pLDDT values.
+
+        Args:
+            chain_id: Chain id.
+
+        Returns:
+            A `(n,)` float32 view into `scores`.
+        """
+        return self.scores[self.chain_slice(chain_id)]
+
+
+def parse_plddt(
+    plddt_json: Any,
+    fallback_lengths: Optional[Mapping[str, int]] = None,
+) -> PLDDTScores:
+    """
+    Parse an AFDB pLDDT document.
+
+    Args:
+        plddt_json:       The parsed document object.
+        fallback_lengths: `{chain_id: n_residues}` used only when the document
+                          omits `chains`.
+
+    Returns:
+        A `PLDDTScores`.
+
+    Raises:
+        ValueError: If the chain spans do not account for exactly as many
+            residues as there are scores.
+
+    Example
+    -------
+    >>> doc = {'residueNumber': [1, 2, 1],
+    ...        'confidenceScore': [90.0, 80.0, 70.0],
+    ...        'chains': [{'label_asym_id': 'A', 'sequenceStart': 1, 'sequenceEnd': 2},
+    ...                   {'label_asym_id': 'B', 'sequenceStart': 1, 'sequenceEnd': 1}]}
+    >>> plddt = parse_plddt(doc)
+    >>> plddt.for_chain('A').tolist()
+    [90.0, 80.0]
+    >>> plddt.for_chain('B').tolist()
+    [70.0]
+    """
+    scores = np.array(plddt_json["confidenceScore"], dtype=np.float32)
+    residue_numbers = np.array(plddt_json.get("residueNumber", []), dtype=np.int32)
+    spans = _chain_spans(plddt_json.get("chains", []), fallback_lengths)
+
+    total = sum(span.length for span in spans)
+    if total != scores.shape[0]:
+        raise ValueError(
+            f"pLDDT chain spans total {total} residues but the document carries "
+            f"{scores.shape[0]} scores."
+        )
+
+    return PLDDTScores(scores=scores, residue_numbers=residue_numbers, spans=spans)
+
+
+def verify_chain_lengths(
+    chains: Mapping[str, ChainCoords],
+    document: PAEMatrix | PLDDTScores,
+) -> Dict[str, int]:
+    """
+    Check structure-derived chain lengths against a document's own spans.
+
+    A mismatch means every quadrant slice and every per-chain pLDDT slice is
+    misaligned, which produces plausible-looking but wrong scores rather than an
+    error, so it is checked rather than assumed (R021).
+
+    Args:
+        chains:   `{chain_id: ChainCoords}` from `extract_chain_coords`.
+        document: A `PAEMatrix` or `PLDDTScores` to compare against.
+
+    Returns:
+        The agreed `{chain_id: n_residues}`.
+
+    Raises:
+        ValueError: If the chain sets or any length disagree.
+
+    Example
+    -------
+    >>> spans = (ChainSpan('A', 1, 2), ChainSpan('B', 1, 1))
+    >>> doc = PLDDTScores(np.zeros(3, dtype=np.float32),
+    ...                   np.zeros(3, dtype=np.int32), spans)
+    >>> chains = {'A': ChainCoords('A', np.zeros((2, 3), dtype=np.float32),
+    ...                            np.array([1, 2]), np.array(['ALA', 'ALA']),
+    ...                            np.zeros(2, dtype=np.float32)),
+    ...           'B': ChainCoords('B', np.zeros((1, 3), dtype=np.float32),
+    ...                            np.array([1]), np.array(['GLY']),
+    ...                            np.zeros(1, dtype=np.float32))}
+    >>> verify_chain_lengths(chains, doc)
+    {'A': 2, 'B': 1}
+    """
+    from_structure = {chain_id: chain.n_residues for chain_id, chain in chains.items()}
+    from_document = {span.chain_id: span.length for span in document.spans}
+
+    if set(from_structure) != set(from_document):
+        raise ValueError(
+            f"Chain sets disagree: structure has {sorted(from_structure)}, "
+            f"document has {sorted(from_document)}."
+        )
+    disagreeing = {
+        chain_id: (from_structure[chain_id], from_document[chain_id])
+        for chain_id in from_structure
+        if from_structure[chain_id] != from_document[chain_id]
+    }
+    if disagreeing:
+        detail = ", ".join(
+            f"{chain_id}: structure={s}, document={d}"
+            for chain_id, (s, d) in sorted(disagreeing.items())
+        )
+        raise ValueError(f"Chain lengths disagree ({detail}).")
+    return dict(sorted(from_structure.items()))
 
 
 # ---------------------------------------------------------------------------
-# Interface detection  --  filled by R011
+# Interface detection
 # ---------------------------------------------------------------------------
-# CB-CB (CA for GLY) contact detection at `DIST_CUTOFF`, plus the `ChainCoords` /
-# interface-result carriers that D4's explicit chain pair rides on. R015 absorbs
-# the useful parts of `src/insightfold/interface.py` here and resolves its
-# `n_contacts` name collision into `n_interface_residues` (residues) versus
-# `n_contact_pairs` (pairs; this is the one pDockQ needs).
+# CB-CB (CA for glycine) contacts at `DIST_CUTOFF`, matching `ipsae_v4.py:385`
+# and its inclusive `dist <= cutoff` test (`ipsae_v4.py:652`).
+#
+# The two counts are named apart deliberately (R015). `interface.py` calls
+# `mask_x.sum() + mask_y.sum()` "n_contacts" while the notebook uses the same
+# word for `contact_mask.sum()`; they are different numbers, and pDockQ needs the
+# **pair** count (`ipsae_v4.py:653`, `npairs`). Here they are
+# `n_interface_residues` and `n_contact_pairs`, so neither can be passed where
+# the other is meant.
+
+
+@dataclass(frozen=True, eq=False)
+class InterfaceContacts:
+    """
+    Inter-chain contacts of one ordered chain pair.
+
+    Attributes:
+        chain_x:      Chain id along the rows.
+        chain_y:      Chain id along the columns.
+        dist_matrix:  `(nx, ny)` float32, all pairwise CB/CA distances in Angstrom.
+        contact_mask: `(nx, ny)` bool, `dist_matrix <= dist_cutoff`.
+        mask_x:       `(nx,)` bool, residues of `chain_x` with any contact.
+        mask_y:       `(ny,)` bool, residues of `chain_y` with any contact.
+        dist_cutoff:  The cutoff in force, in Angstrom.
+    """
+
+    chain_x: str
+    chain_y: str
+    dist_matrix: np.ndarray
+    contact_mask: np.ndarray
+    mask_x: np.ndarray
+    mask_y: np.ndarray
+    dist_cutoff: float
+
+    @property
+    def n_contact_pairs(self) -> int:
+        """Residue **pairs** within the cutoff. This is pDockQ's `npairs`."""
+        return int(self.contact_mask.sum())
+
+    @property
+    def n_interface_residues(self) -> int:
+        """Interface **residues**, both chains summed. Not `n_contact_pairs`."""
+        return int(self.mask_x.sum()) + int(self.mask_y.sum())
+
+    @property
+    def n_interface_residues_x(self) -> int:
+        """Interface residues in `chain_x` alone."""
+        return int(self.mask_x.sum())
+
+    @property
+    def n_interface_residues_y(self) -> int:
+        """Interface residues in `chain_y` alone."""
+        return int(self.mask_y.sum())
+
+    @property
+    def contact_pairs(self) -> List[Tuple[int, int]]:
+        """`(i, j)` index pairs within the cutoff, positional not residue-numbered."""
+        rows, cols = np.where(self.contact_mask)
+        return [(int(i), int(j)) for i, j in zip(rows, cols)]
+
+
+def detect_interface(
+    chain_x: ChainCoords,
+    chain_y: ChainCoords,
+    dist_cutoff: float = DIST_CUTOFF,
+) -> InterfaceContacts:
+    """
+    Detect the interface between an ordered pair of chains by CB-CB distance.
+
+    Glycine has no CB atom; `extract_chain_coords` has already substituted its
+    CA, so callers never handle glycine themselves.
+
+    Memory is `O(nx * ny)`: a 1000-residue pair is about 8 MB of float32 distances
+    plus the `(nx, ny, 3)` broadcast temporary, which is fine on Colab.
+
+    Args:
+        chain_x:     First chain of the ordered pair (rows).
+        chain_y:     Second chain of the ordered pair (columns).
+        dist_cutoff: Contact cutoff in Angstrom, tested inclusively.
+
+    Returns:
+        An `InterfaceContacts` carrying the distance matrix, the pairwise contact
+        mask, both per-chain interface masks and both counts.
+
+    Example
+    -------
+    >>> a = ChainCoords('A', np.array([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]], dtype=np.float32),
+    ...                 np.array([1, 2], dtype=np.int32), np.array(['ALA', 'ALA']),
+    ...                 np.array([90.0, 85.0], dtype=np.float32))
+    >>> b = ChainCoords('B', np.array([[3.0, 0.0, 0.0], [20.0, 0.0, 0.0]], dtype=np.float32),
+    ...                 np.array([1, 2], dtype=np.int32), np.array(['GLY', 'ALA']),
+    ...                 np.array([88.0, 80.0], dtype=np.float32))
+    >>> contacts = detect_interface(a, b)
+    >>> contacts.n_contact_pairs          # A1-B1 at 3 A and A2-B1 at 7 A
+    2
+    >>> contacts.n_interface_residues     # both A residues, one B residue
+    3
+    >>> contacts.contact_pairs
+    [(0, 0), (1, 0)]
+    """
+    diff = chain_x.coords[:, np.newaxis, :] - chain_y.coords[np.newaxis, :, :]
+    dist_matrix = np.sqrt((diff ** 2).sum(axis=-1)).astype(np.float32)
+    contact_mask = dist_matrix <= dist_cutoff
+
+    return InterfaceContacts(
+        chain_x=chain_x.chain_id,
+        chain_y=chain_y.chain_id,
+        dist_matrix=dist_matrix,
+        contact_mask=contact_mask,
+        mask_x=contact_mask.any(axis=1),
+        mask_y=contact_mask.any(axis=0),
+        dist_cutoff=float(dist_cutoff),
+    )
 
 
 # ---------------------------------------------------------------------------
