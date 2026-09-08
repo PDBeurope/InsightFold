@@ -110,6 +110,7 @@ runs off them; R016 switches the call sites over.
 from __future__ import annotations
 
 import base64
+import html as _html
 import math
 import textwrap
 from dataclasses import dataclass, field, replace
@@ -223,6 +224,15 @@ __all__ = [
     "AFDB_RELEASE_SCALE",
     "AFDBHighConfidence",
     "afdb_high_confidence",
+    # Section 7: one summary object for the table and the prose (R080)
+    "BAND_COLOUR_HEX",
+    "SCORE_DESCRIPTIONS",
+    "SummaryRow",
+    "ConfidenceSummary",
+    "summarise_scores",
+    "format_afdb_verdict",
+    "format_summary_table_html",
+    "format_diagnostic_report",
     # plotting: style and palette
     "NOTEBOOK_RC_PARAMS",
     "apply_plot_style",
@@ -258,6 +268,8 @@ __all__ = [
     "plot_residue_score_profiles",
     "plot_plddt_distribution",
     "plot_score_agreement",
+    "THRESHOLD_MARGIN_CAP",
+    "plot_threshold_margins",
     # MolViewSpec: capability check
     "MOLVIEWSPEC_MISSING_MESSAGE",
     "molviewspec_available",
@@ -5696,6 +5708,649 @@ def afdb_high_confidence(ipsae_d0res: float, pdockq2: float) -> AFDBHighConfiden
 
 
 # ---------------------------------------------------------------------------
+# Section 7: one summary object, read by both the table and the prose (R080)
+# ---------------------------------------------------------------------------
+# The defect this section exists to make impossible: the summary table and the
+# plain-text diagnostic used to derive their verdicts separately, so a run could
+# print "consistently HIGH confidence across all metrics" underneath a table
+# showing an amber badge. Reproduced on FX-008 (AF-0000000211619209, ipSAE_d0res
+# 0.6366 amber) and FX-009 (AF-0000000211157965, ipTM_d0chn 0.5769 amber).
+#
+# The fix is structural rather than a corrected conditional. `summarise_scores`
+# builds one `ConfidenceSummary` whose `overall` sentence is *derived from the
+# same band counts* the table renders, and both `format_summary_table_html` and
+# `format_diagnostic_report` render that one object. There is no second code
+# path left that could reach a different conclusion.
+
+BAND_COLOUR_HEX: Dict[Band, str] = {
+    "green": "#4CAF50",
+    "amber": "#FF9800",
+    "red": "#F44336",
+}
+"""Badge colour per traffic-light band. Status colours, reserved for state: they
+are never reused as a series palette. Every badge that carries one also carries
+the band's own name, so the verdict is never conveyed by colour alone."""
+
+
+SCORE_DESCRIPTIONS: Dict[str, str] = {
+    "ipsae_d0res": (
+        "ipSAE with a per-residue d0, over inter-chain pairs with PAE < 10. "
+        "AFDB's ipSAEmax, and one half of its release criterion."
+    ),
+    "ipsae_d0chn": (
+        "Same pairs, but one d0 from the whole chain-pair length, which is the "
+        "largest of the three and so the most forgiving variant."
+    ),
+    "ipsae_d0dom": (
+        "Same pairs, d0 from the number of residues on either chain with at "
+        "least one sub-cutoff pair. Lies between d0res and d0chn."
+    ),
+    "iptm_d0chn": (
+        "ipSAE_d0chn without the PAE cutoff: every inter-chain cell counts. "
+        "A reimplementation from PAE, not AlphaFold's own ipTM."
+    ),
+    "pdockq": (
+        "Sigmoid of mean interface pLDDT x log10(contact pairs). pLDDT is "
+        "averaged over the contacting residues of both chains. No PAE."
+    ),
+    "pdockq2": (
+        "Sigmoid of that same mean pLDDT x the mean PAE-to-TM transform "
+        "(fixed d0 = 10) over the contact pairs. A product, not a sum."
+    ),
+    "lis": (
+        "Mean of (12 - PAE) / 12 over inter-chain cells below PAE 12: how far "
+        "below the cutoff the confident cells sit, not how many there are."
+    ),
+}
+"""One audited line per score, checked against
+`specs/homodimer_diagnostic/formula-reference.md` (R081).
+
+Three of the previous seven were wrong and are corrected here:
+
+- **pDockQ** was "Contact count x interface pLDDT". The count is a count of
+  contact *pairs*, it enters as its `log10`, the pLDDT is a mean over the union
+  of contacting residues in *both* chains, and the product is then passed
+  through a sigmoid (formula-reference.md section 5).
+- **pDockQ2** was "Contact PAE + interface pLDDT". It is a product, not a sum,
+  and the PAE term is a mean of `ptm_func(PAE, 10.0)` over contact pairs rather
+  than a mean PAE (formula-reference.md section 6).
+- **LIS** was "Density of inter-chain PAE < 12". It is not a density: the mean
+  runs over the sub-cutoff cells *only*, so the number of them never enters. A
+  block with one cell at PAE 0 scores 1.0 (formula-reference.md section 7).
+
+`ipsae_d0res` also loses "Primary AFDB classifier": the classifier is the
+conjunction in `AFDB_JOINT_CRITERION`, of which this score is one side."""
+
+
+@dataclass(frozen=True)
+class SummaryRow:
+    """
+    One score's row in the Section 7 summary, values and provenance together.
+
+    Attributes:
+        name:        `THRESHOLDS` key.
+        display:     Display label from `SCORE_DISPLAY_NAMES`.
+        value:       The computed score.
+        colour:      `'green'` / `'amber'` / `'red'`.
+        label:       Band name; AFDB's published wording for `ipsae_d0res`.
+        colour_hex:  Badge colour for `colour`.
+        provenance:  Provenance of the edge that put the value in this band.
+        green:       The green edge, for display.
+        amber:       The amber edge, for display.
+        description: Audited one-liner from `SCORE_DESCRIPTIONS`.
+        source:      Short citation for the threshold, with a page.
+        note:        The threshold's caveat, if it carries one.
+        independent: Whether this score is one of `AGREEMENT_SCORES`, i.e. one
+                     of the values the overall verdict is counted over.
+    """
+
+    name: str
+    display: str
+    value: float
+    colour: Band
+    label: str
+    colour_hex: str
+    provenance: Provenance
+    green: float
+    amber: float
+    description: str
+    source: str
+    note: str
+    independent: bool
+
+
+@dataclass(frozen=True)
+class ConfidenceSummary:
+    """
+    Everything Section 7 says about one complex, derived exactly once.
+
+    `overall` is computed from `n_green` / `n_amber` / `n_red`, which are counted
+    from the very `rows` the table renders, so the prose cannot contradict the
+    badges (R080). `divergences` are the pairwise readings, each phrased from the
+    same band assignments.
+
+    Attributes:
+        rows:        Every score supplied, in the order given.
+        independent: The subset counted for the overall verdict; by default the
+                     five of `AGREEMENT_SCORES`, because the other two ipSAE
+                     variants are ordered by a theorem and so cannot supply
+                     independent agreement.
+        by_name:     `rows` keyed by `THRESHOLDS` key.
+        afdb:        The joint release verdict, the headline of the section.
+        n_green:     Green count over `independent`.
+        n_amber:     Amber count over `independent`.
+        n_red:       Red count over `independent`.
+        overall:     The OVERALL sentence.
+        divergences: Pairwise readings that apply to this complex.
+    """
+
+    rows: Tuple[SummaryRow, ...]
+    independent: Tuple[SummaryRow, ...]
+    by_name: Dict[str, SummaryRow]
+    afdb: AFDBHighConfidence
+    n_green: int
+    n_amber: int
+    n_red: int
+    overall: str
+    divergences: Tuple[str, ...]
+
+    def not_green(self) -> Tuple[SummaryRow, ...]:
+        """The independent rows that are not green, worst band first."""
+        order = {"red": 0, "amber": 1}
+        return tuple(
+            sorted(
+                (row for row in self.independent if row.colour != "green"),
+                key=lambda row: (order[row.colour], row.value),
+            )
+        )
+
+
+def _join_names(rows: Sequence[SummaryRow]) -> str:
+    """`'a'`, `'a and b'`, `'a, b and c'`."""
+    names = [f"{row.display} {row.value:.3f} ({row.label})" for row in rows]
+    if len(names) == 1:
+        return names[0]
+    return ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def summarise_scores(
+    scores: Mapping[str, float],
+    independent_names: Optional[Sequence[str]] = None,
+) -> ConfidenceSummary:
+    """
+    Turn a `{THRESHOLDS key: value}` mapping into the one Section 7 summary.
+
+    Every band, colour, count, verdict and sentence Section 7 shows comes from
+    the object this returns, so the table and the prose are one derivation with
+    two renderings rather than two derivations that happen to usually agree.
+
+    Args:
+        scores:            `{THRESHOLDS key: value}`. `ipsae_d0res` and
+                           `pdockq2` must be present, since the AFDB criterion
+                           is evaluated on them.
+        independent_names: Which scores the overall verdict is counted over;
+                           defaults to `AGREEMENT_SCORES`.
+
+    Returns:
+        A `ConfidenceSummary`.
+
+    Raises:
+        KeyError: If a score is not a `THRESHOLDS` key, if `ipsae_d0res` or
+            `pdockq2` is missing, or if a requested independent name has no
+            value.
+
+    Example
+    -------
+    >>> s = summarise_scores({'ipsae_d0res': 0.6366, 'ipsae_d0chn': 0.8313,
+    ...                       'ipsae_d0dom': 0.7735, 'iptm_d0chn': 0.8183,
+    ...                       'pdockq': 0.2418, 'pdockq2': 0.3254,
+    ...                       'lis': 0.4783})
+    >>> s.n_green, s.n_amber, s.n_red
+    (4, 1, 0)
+    >>> s.afdb.verdict
+    'PASS'
+
+    The overall sentence names the score the table paints amber, so the two
+    cannot disagree:
+
+    >>> 'ipSAE_d0res 0.637' in s.overall
+    True
+    >>> 'consistently' in s.overall
+    False
+    """
+    unknown = [name for name in scores if name not in THRESHOLDS]
+    if unknown:
+        raise KeyError(
+            f"No canonical threshold for: {', '.join(sorted(unknown))}. "
+            f"Expected keys from THRESHOLDS: {', '.join(sorted(THRESHOLDS))}."
+        )
+    for required in ("ipsae_d0res", "pdockq2"):
+        if required not in scores:
+            raise KeyError(
+                f"{required!r} is required: the AFDB joint criterion is "
+                "evaluated on ipsae_d0res and pdockq2."
+            )
+
+    names = (
+        tuple(AGREEMENT_SCORES) if independent_names is None
+        else tuple(independent_names)
+    )
+    missing = [name for name in names if name not in scores]
+    if missing:
+        raise KeyError(f"No value supplied for: {', '.join(missing)}.")
+
+    rows = []
+    for name, value in scores.items():
+        threshold = THRESHOLDS[name]
+        band = threshold.confidence_band(float(value))
+        rows.append(
+            SummaryRow(
+                name=name,
+                display=SCORE_DISPLAY_NAMES.get(name, name),
+                value=float(value),
+                colour=band.colour,
+                label=band.label,
+                colour_hex=BAND_COLOUR_HEX[band.colour],
+                # The band's own edge provenance, which for a published ladder
+                # is per-band rather than the coarse green/amber split.
+                provenance=band.provenance,
+                green=threshold.green,
+                amber=threshold.amber,
+                description=SCORE_DESCRIPTIONS.get(name, ""),
+                source=band.source or threshold.source,
+                note=threshold.note,
+                independent=name in names,
+            )
+        )
+    rows = tuple(rows)
+    by_name = {row.name: row for row in rows}
+    independent = tuple(by_name[name] for name in names)
+
+    n_green = sum(1 for row in independent if row.colour == "green")
+    n_amber = sum(1 for row in independent if row.colour == "amber")
+    n_red = sum(1 for row in independent if row.colour == "red")
+    n_total = len(independent)
+
+    afdb = afdb_high_confidence(
+        float(scores["ipsae_d0res"]), float(scores["pdockq2"])
+    )
+
+    below = tuple(
+        sorted(
+            (row for row in independent if row.colour != "green"),
+            key=lambda row: ({"red": 0, "amber": 1}[row.colour], row.value),
+        )
+    )
+    if not below:
+        overall = (
+            f"OVERALL: all {n_total} independent scores are green. "
+            "The interface is well resolved, structurally plausible, and the "
+            "PAE matrix is confident about the relative chain placement."
+        )
+    elif n_green == 0:
+        overall = (
+            f"OVERALL: none of the {n_total} independent scores reaches green "
+            f"({_join_names(below)}). Treat any structural conclusion drawn "
+            "from this model as unsupported."
+        )
+    else:
+        overall = (
+            f"OVERALL: mixed. {n_green} of {n_total} independent scores are "
+            f"green; {_join_names(below)} "
+            f"{'is' if len(below) == 1 else 'are'} not. The scores disagree, "
+            "and the paragraphs below say where."
+        )
+
+    divergences = _score_divergences(by_name)
+
+    return ConfidenceSummary(
+        rows=rows,
+        independent=independent,
+        by_name=by_name,
+        afdb=afdb,
+        n_green=n_green,
+        n_amber=n_amber,
+        n_red=n_red,
+        overall=overall,
+        divergences=divergences,
+    )
+
+
+def _score_divergences(by_name: Mapping[str, SummaryRow]) -> Tuple[str, ...]:
+    """The pairwise readings, phrased from the same bands the table paints."""
+    out: List[str] = []
+
+    ipsae = by_name.get("ipsae_d0res")
+    pdockq = by_name.get("pdockq")
+    pdockq2 = by_name.get("pdockq2")
+    lis = by_name.get("lis")
+    iptm = by_name.get("iptm_d0chn")
+
+    if ipsae and pdockq:
+        if ipsae.colour == "green" and pdockq.colour != "green":
+            out.append(
+                f"PAE vs STRUCTURE: AlphaFold is confident about the relative "
+                f"chain placement (ipSAE_d0res {ipsae.value:.3f}, "
+                f"{ipsae.label}), but the interface itself is thin or poorly "
+                f"resolved (pDockQ {pdockq.value:.3f}, {pdockq.label}). This "
+                f"happens with a small, tight interface, or when the predicted "
+                f"separation is just wide of the {DIST_CUTOFF:.0f} A contact "
+                f"cutoff."
+            )
+        if pdockq.colour == "green" and ipsae.colour != "green":
+            out.append(
+                f"STRUCTURE vs PAE: there are many contacts between well "
+                f"resolved residues (pDockQ {pdockq.value:.3f}, "
+                f"{pdockq.label}), but PAE is not confident about how the two "
+                f"chains sit relative to one another (ipSAE_d0res "
+                f"{ipsae.value:.3f}, {ipsae.label}). Each chain can be "
+                f"predicted well while the docking orientation is not. Note "
+                f"that Zhu 2023 found pDockQ over-optimistic on exactly this "
+                f"case: large, confident, incorrect interfaces."
+            )
+
+    if pdockq and pdockq2:
+        # Each in units of its own canonical green threshold, so the comparison
+        # is between two "fraction of the bar it has to clear" numbers rather
+        # than between two incomparable scales.
+        pdockq_margin = pdockq.value / pdockq.green
+        pdockq2_margin = pdockq2.value / pdockq2.green
+        if abs(pdockq_margin - pdockq2_margin) > 0.4:
+            lower = pdockq2_margin < pdockq_margin
+            out.append(
+                f"pDockQ vs pDockQ2 (pDockQ2 "
+                f"{'<' if lower else '>'} pDockQ, "
+                f"{pdockq2_margin:.2f} vs {pdockq_margin:.2f} times their own "
+                f"green thresholds): the two differ by more than they share. "
+                f"They use the same contacts and the same mean pLDDT, so the "
+                f"gap is entirely the PAE at those contacts, which is "
+                f"{'low' if lower else 'high'}. pDockQ2 is the more "
+                f"informative of the two and is the one AFDB uses."
+            )
+
+    if lis and ipsae and lis.colour == "green" and ipsae.colour != "green":
+        out.append(
+            f"LIS vs ipSAE: plenty of inter-chain PAE sits below "
+            f"{LIS_CUTOFF:.0f} A (LIS {lis.value:.3f}, {lis.label}), but "
+            f"tightening the cutoff to {PAE_CUTOFF:.0f} A and applying the "
+            f"TM-score transform drops the score (ipSAE_d0res "
+            f"{ipsae.value:.3f}, {ipsae.label}). That reads as a broad, "
+            f"diffuse contact region rather than a tight, well defined "
+            f"interface."
+        )
+
+    if iptm and ipsae and iptm.colour != ipsae.colour:
+        # The two read the same PAE block and differ in exactly two ways:
+        # ipSAE drops every pair at or above the cutoff, which pushes its score
+        # up, and it normalises by how many pairs survived rather than by the
+        # whole chain pair, which pushes it down. Which of the two wins is the
+        # finding, so the sentence has to branch on the sign rather than assume
+        # one of them.
+        if iptm.value > ipsae.value:
+            reading = (
+                "Here the normalisation wins: the confident region is small "
+                "relative to the length of the chain pair, so the full-length "
+                "average that ipTM_d0chn takes is flattering the model, and "
+                "ipSAE_d0res is the number to trust."
+            )
+        else:
+            reading = (
+                "Here the cutoff wins: there is a genuinely confident patch, "
+                "and it was being diluted in ipTM_d0chn by a large surrounding "
+                "area of high inter-chain PAE that ipSAE discards. A low "
+                "ipTM_d0chn beside a high ipSAE_d0res is the signature of a "
+                "well defined interface on chains that are otherwise "
+                "uncertain about each other."
+            )
+        out.append(
+            f"ipTM_d0chn vs ipSAE_d0res: the same PAE block read two ways "
+            f"disagrees (ipSAE_d0res {ipsae.value:.3f}, {ipsae.label}; "
+            f"ipTM_d0chn {iptm.value:.3f}, {iptm.label}). The two differ in "
+            f"exactly two things: ipSAE drops every pair with PAE >= "
+            f"{PAE_CUTOFF:.0f} A, and it normalises by how many pairs survived "
+            f"rather than by the whole chain pair. {reading}"
+        )
+
+    return tuple(out)
+
+
+def format_afdb_verdict(summary: ConfidenceSummary, width: int = 63) -> str:
+    """
+    The headline verdict: would this model qualify for AFDB high-confidence release?
+
+    This, not the per-score traffic lights, is the classifier AFDB used on ~31
+    million candidate complexes. The text states the criterion, the outcome, the
+    validation figures, and the two things a reader most often gets wrong: that
+    a FAIL is not a claim of "no interaction", and that 0.6 is a conservative
+    operating point rather than an optimum.
+
+    Args:
+        summary: From `summarise_scores`.
+        width:   Wrap width for the prose lines.
+
+    Returns:
+        A ready-to-print block of text.
+
+    Example
+    -------
+    >>> s = summarise_scores({'ipsae_d0res': 0.55, 'pdockq2': 0.64,
+    ...                       'iptm_d0chn': 0.8, 'pdockq': 0.4, 'lis': 0.3})
+    >>> print(format_afdb_verdict(s).splitlines()[1])
+    AFDB HIGH-CONFIDENCE RELEASE CRITERION:  FAIL
+    """
+    criterion = AFDB_JOINT_CRITERION
+    lines = [
+        "=" * 65,
+        "AFDB HIGH-CONFIDENCE RELEASE CRITERION:  "
+        f"{summary.afdb.verdict}",
+        "=" * 65,
+        "",
+        f"  Rule:  ipSAE_d0res >= {criterion.ipsae_d0res_min:.2f}  AND  "
+        f"pDockQ2 >= {criterion.pdockq2_min:.2f}",
+        f"         ipSAE_d0res {summary.afdb.ipsae_d0res:.4f}  "
+        f"{'PASS' if summary.afdb.ipsae_d0res_pass else 'FAIL'}",
+        f"         pDockQ2     {summary.afdb.pdockq2:.4f}  "
+        f"{'PASS' if summary.afdb.pdockq2_pass else 'FAIL'}",
+        "",
+    ]
+    for paragraph in (
+        summary.afdb.reason,
+        f"This one conjunction, not the seven traffic lights below, is the "
+        f"classifier AlphaFold DB actually applied, to over "
+        f"{AFDB_RELEASE_SCALE['candidate_complexes'] / 1e6:.0f} million "
+        f"candidate complexes; "
+        f"{AFDB_RELEASE_SCALE['homodimers_high_confidence']:,} homodimers "
+        f"({AFDB_RELEASE_SCALE['homodimer_high_confidence_fraction']:.1%}) and "
+        f"{AFDB_RELEASE_SCALE['heterodimers_high_confidence']:,} heterodimers "
+        f"({AFDB_RELEASE_SCALE['heterodimer_high_confidence_fraction']:.1%}) "
+        f"passed it. A 9% pass rate is the filter working as designed, not a "
+        f"measure of how many predictions are wrong.",
+        criterion.note,
+        f"A FAIL means the model would not be surfaced as a high-confidence "
+        f"AFDB entry. It does not mean the pair does not interact: "
+        f"below-threshold dimers are published with their interface scores at "
+        f"{AFDB_BELOW_THRESHOLD_FTP}.",
+    ):
+        lines.append(textwrap.fill(paragraph, width=width,
+                                   initial_indent="  ", subsequent_indent="  "))
+        lines.append("")
+    lines.append(f"  Source: {criterion.source.split(':')[0]}.")
+    lines.append("=" * 65)
+    return "\n".join(lines)
+
+
+def format_summary_table_html(
+    summary: ConfidenceSummary,
+    title: str = "",
+    subtitle: str = "",
+) -> str:
+    """
+    Render the summary table, provenance column included.
+
+    Every number, band, colour and citation comes from the `ConfidenceSummary`,
+    which is the same object `format_diagnostic_report` renders, so the table
+    and the prose are two views of one derivation (R080).
+
+    The provenance column is the point of the rebuild: a coloured badge alone
+    gives a reader no way to tell a published operating cutoff from a round
+    number somebody picked. `PUBLISHED` / `DERIVED` / `HEURISTIC` are defined in
+    `specs/homodimer_diagnostic/threshold-reference.md` and carried on
+    `Threshold.green_provenance` / `.amber_provenance` and on each
+    `ConfidenceBand`.
+
+    Args:
+        summary:  From `summarise_scores`.
+        title:    Heading text; omitted when empty. Escaped.
+        subtitle: Sub-heading **HTML**, e.g. the two chain descriptions joined
+                  by a `<br>`. Interpolated verbatim, so a caller passing a
+                  protein name straight from AFDB should escape it first; every
+                  string taken from the summary itself is escaped here.
+
+    Returns:
+        An HTML string, for `IPython.display.HTML`.
+
+    Example
+    -------
+    >>> s = summarise_scores({'ipsae_d0res': 0.81, 'pdockq2': 0.64,
+    ...                       'iptm_d0chn': 0.8, 'pdockq': 0.4, 'lis': 0.3})
+    >>> html = format_summary_table_html(s, title='Demo')
+    >>> 'VERY HIGH-CONFIDENCE' in html and 'PUBLISHED' in html
+    True
+    """
+    prov_hex = {"PUBLISHED": "#37474F", "DERIVED": "#607D8B",
+                "HEURISTIC": "#B0850F"}
+
+    dagger = ('<span style="font-weight:normal;color:#999;"> '
+              '&dagger;</span>')
+
+    # Descriptions and reasons contain '<' ("PAE < 10", "ipSAE_d0res 0.55 <
+    # 0.60"), which a browser reads as the start of a tag and silently eats
+    # along with everything after it. Escape every interpolated string.
+    esc = _html.escape
+
+    rows_html = ""
+    for row in summary.rows:
+        edges = f"green &ge; {row.green:g}, amber &ge; {row.amber:g}"
+        rows_html += (
+            '<tr style="border-top:1px solid #eee;">'
+            '<td style="font-weight:bold;padding:6px 12px;white-space:nowrap;">'
+            f'{esc(row.display)}{"" if row.independent else dagger}'
+            '</td>'
+            '<td style="padding:6px 12px;text-align:center;font-size:1.15em;'
+            f'font-weight:bold;">{row.value:.4f}</td>'
+            '<td style="padding:6px 12px;text-align:center;">'
+            f'<span style="background:{row.colour_hex};color:white;'
+            'padding:3px 10px;border-radius:12px;font-weight:bold;'
+            f'font-size:0.85em;white-space:nowrap;">{esc(row.label)}</span></td>'
+            '<td style="padding:6px 12px;text-align:center;">'
+            f'<span style="color:{prov_hex.get(row.provenance, "#607D8B")};'
+            'font-size:0.78em;font-weight:bold;letter-spacing:0.04em;'
+            f'white-space:nowrap;">{esc(row.provenance)}</span>'
+            '<br><span style="color:#999;font-size:0.72em;white-space:nowrap;">'
+            f'{edges}</span></td>'
+            '<td style="padding:6px 12px;font-size:0.88em;color:#555;">'
+            f'{esc(row.description)}</td>'
+            '</tr>'
+        )
+
+    heading = f'<h3 style="margin-bottom:4px;">{esc(title)}</h3>' if title else ""
+    sub = (
+        f'<p style="font-family:sans-serif;color:#555;margin:0 0 10px;">'
+        f'{subtitle}</p>' if subtitle else ""
+    )
+    verdict_hex = "#4CAF50" if summary.afdb.passed else "#F44336"
+    banner = (
+        '<div style="font-family:sans-serif;margin:0 0 14px;padding:10px 14px;'
+        f'border-left:6px solid {verdict_hex};background:#FAFAFA;">'
+        '<span style="font-weight:bold;font-size:1.05em;">'
+        'AFDB high-confidence release criterion: '
+        f'<span style="color:{verdict_hex};">{summary.afdb.verdict}</span>'
+        '</span><br>'
+        '<span style="color:#555;font-size:0.88em;">'
+        f'ipSAE_d0res &ge; {AFDB_IPSAE_D0RES_MIN:.2f} AND pDockQ2 &ge; '
+        f'{AFDB_PDOCKQ2_MIN:.2f} &nbsp;&mdash;&nbsp; {esc(summary.afdb.reason)}'
+        '</span></div>'
+    )
+    footer = (
+        '<p style="font-family:sans-serif;color:#777;font-size:0.8em;'
+        'margin:8px 0 0;">'
+        'PUBLISHED = the cited paper states or applies this cutoff as an '
+        'operating criterion. DERIVED = obtained from a paper\'s own '
+        'quantitative statements by one documented inferential step. '
+        'HEURISTIC = a judgement call with no literature basis. '
+        '&dagger; = not counted in the overall verdict: '
+        'ipSAE_d0chn &ge; ipSAE_d0dom &ge; ipSAE_d0res is a theorem, so these '
+        'two cannot supply independent agreement.'
+        '</p>'
+    )
+    return (
+        heading + sub + banner +
+        '<table style="border-collapse:collapse;width:100%;'
+        'font-family:sans-serif;">'
+        '<thead><tr style="background:#f5f5f5;">'
+        '<th style="padding:8px 12px;text-align:left;">Score</th>'
+        '<th style="padding:8px 12px;">Value</th>'
+        '<th style="padding:8px 12px;">Confidence</th>'
+        '<th style="padding:8px 12px;">Threshold provenance</th>'
+        '<th style="padding:8px 12px;text-align:left;">What it measures</th>'
+        f'</tr></thead><tbody>{rows_html}</tbody></table>' + footer
+    )
+
+
+def format_diagnostic_report(
+    summary: ConfidenceSummary,
+    width: int = 63,
+) -> str:
+    """
+    The plain-text diagnostic, rendered from the same object as the table.
+
+    The overall sentence is `summary.overall`, which is computed from the band
+    counts over `summary.independent` -- the same bands the table paints. There
+    is no separate threshold comparison here and no `green / 2` anywhere, so the
+    prose cannot label a score differently from the row above it (R080).
+
+    Args:
+        summary: From `summarise_scores`.
+        width:   Wrap width.
+
+    Returns:
+        A ready-to-print block of text.
+
+    Example
+    -------
+    On FX-008's values the old code printed "consistently HIGH confidence across
+    all metrics" while the table showed an amber badge. It now names the amber
+    score in the same sentence:
+
+    >>> s = summarise_scores({'ipsae_d0res': 0.6366, 'ipsae_d0chn': 0.8313,
+    ...                       'ipsae_d0dom': 0.7735, 'iptm_d0chn': 0.8183,
+    ...                       'pdockq': 0.2418, 'pdockq2': 0.3254,
+    ...                       'lis': 0.4783})
+    >>> report = format_diagnostic_report(s)
+    >>> 'consistently HIGH confidence' in report
+    False
+    >>> 'ipSAE_d0res 0.637 (LOW-CONFIDENCE) is not' in ' '.join(report.split())
+    True
+    """
+    lines = ["=" * 65, "DIAGNOSTIC INTERPRETATION", "=" * 65, ""]
+    lines.append(textwrap.fill(summary.overall, width=width))
+    for statement in summary.divergences:
+        lines.append("")
+        lines.append(textwrap.fill(statement, width=width))
+    lines.append("")
+    lines.append("─" * 65)
+    lines.append("Score summary († = not independent, see the table):")
+    for row in summary.rows:
+        mark = " " if row.independent else "†"
+        lines.append(
+            f" {mark}{row.display:14s}: {row.value:.4f}  "
+            f"[{row.label}]  {row.provenance}"
+        )
+    lines.append("─" * 65)
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Plotting
 # ---------------------------------------------------------------------------
 # One `plot_*` function per figure, each returning a `matplotlib` `Figure` and
@@ -5956,10 +6611,13 @@ AGREEMENT_SCORES: Tuple[str, ...] = (
     "pdockq2",
     "lis",
 )
-"""The five values the agreement matrix compares: one ipSAE variant plus the four
-independent scores. The other two ipSAE variants are excluded because
+"""The five genuinely independent values: one ipSAE variant plus the four other
+scores. The other two ipSAE variants are excluded because
 `d0chn >= d0dom >= d0res` is a theorem, so including them would show three
-guaranteed agreements as if they were three confirmations."""
+guaranteed agreements as if they were three confirmations.
+
+Read by `plot_threshold_margins`, by `plot_score_agreement`, and by
+`summarise_scores`, which counts its overall verdict over exactly this set."""
 
 
 # -- figure geometry (R050) -------------------------------------------------
@@ -7148,6 +7806,14 @@ def plot_score_agreement(
     """
     How far apart the scores are once each is expressed in units of its own cutoff.
 
+    **Superseded by `plot_threshold_margins` (R082), which is what Section 7 now
+    draws.** Kept because it is a working public function and a caller may still
+    want the matrix form, but read that function's docstring before choosing it:
+    over scalar scores `|a_i - a_j|` is a distance matrix over points on a line,
+    so every off-diagonal cell here is determined by the handful of normalised
+    values, and `cap` makes two scores that are both far past their thresholds
+    register as agreeing perfectly.
+
     The scores are on incomparable scales, so `0.30` means something different for
     LIS than for pDockQ. Dividing each by its own green threshold puts them all in
     "fraction of the bar it has to clear", after which `|a - b|` is a meaningful
@@ -7172,10 +7838,11 @@ def plot_score_agreement(
             `THRESHOLDS` key -- there would be no cutoff to normalise it by.
 
     Note:
-        Normalisation reads `THRESHOLDS[name].green`, the canonical table, which
-        is not the ad-hoc threshold dict the notebook still carries inline; the
-        numbers here therefore differ from the notebook's until R016 switches its
-        summary table over too.
+        Normalisation reads `THRESHOLDS[name].green`, the canonical table, so the
+        figure inherits whatever uncertainty those cutoffs carry -- four of the
+        seven are DERIVED or HEURISTIC. Unlike `plot_threshold_margins` this
+        figure has nowhere to say so, which is the second half of why R082
+        replaced it.
     """
     names = AGREEMENT_SCORES if score_names is None else tuple(score_names)
     display = dict(SCORE_DISPLAY_NAMES if labels is None else labels)
@@ -7213,6 +7880,165 @@ def plot_score_agreement(
                     fontsize=9, color='black')
     ax.set_title('Pairwise Score Agreement Matrix\n'
                  '(dark green = agree, dark red = strongly disagree)')
+
+    fig.tight_layout()
+    return fig
+
+
+THRESHOLD_MARGIN_CAP: float = 2.0
+"""Right-hand limit of the `plot_threshold_margins` axis, in units of the green
+threshold. Unlike the agreement matrix's `cap`, this clips only the *drawing* of
+a bar: the raw score and its exact margin are printed on every row, so a value
+past the edge is still readable as a number."""
+
+
+def plot_threshold_margins(
+    scores: Mapping[str, float],
+    score_names: Optional[Sequence[str]] = None,
+    labels: Optional[Mapping[str, str]] = None,
+    axis_cap: float = THRESHOLD_MARGIN_CAP,
+    figsize: Tuple[float, float] = (7.4, 3.6),
+) -> Figure:
+    """
+    Each score's distance from its own green threshold, on one shared axis.
+
+    This replaces the pairwise agreement matrix (R082). The matrix plotted
+    `|a_i - a_j|` over scalars, and a distance matrix over scalars is a distance
+    matrix over points on a line: all 10 of its off-diagonal numbers are
+    determined by the 5 normalised values, so it spent 25 cells re-encoding 5.
+    It also capped the normalised values at 1.5, which made any two scores far
+    past their thresholds register as *perfect* agreement -- precisely the case
+    on an AFDB accession, which has already passed the release filter. The
+    matrix was therefore closest to blank exactly where the notebook is most
+    often used.
+
+    Plotting the 5 normalised values directly keeps every disagreement the
+    matrix could show -- the gap between any two rows *is* the pairwise
+    `|a_i - a_j|`, read straight off the axis -- and restores three things the
+    matrix destroyed: which side of its threshold each score falls on, how far
+    past it a score goes, and what each score's "1.0" is actually worth. The
+    green line at 1.0 is 0.70 for ipSAE and 0.23 for pDockQ, and one of those is
+    published while the other is derived; the matrix hid both facts inside a
+    single number.
+
+    The normalisation is still `value / THRESHOLDS[name].green`, so the figure
+    still depends on the thresholds being right. The difference is that it now
+    says so: the axis is labelled with what the division is, and every row
+    prints its own green edge and that edge's provenance.
+
+    Args:
+        scores:      `{THRESHOLDS key: value}`. Extra keys are ignored.
+        score_names: Which values to show, in display order; defaults to
+                     `AGREEMENT_SCORES`.
+        labels:      Display names; defaults to `SCORE_DISPLAY_NAMES`.
+        axis_cap:    Right-hand axis limit, in units of the green threshold.
+                     Bars are drawn clipped to it; the printed numbers are not.
+        figsize:     Figure size in inches.
+
+    Returns:
+        The `Figure`.
+
+    Raises:
+        KeyError: If a requested score is missing from `scores`, or is not a
+            `THRESHOLDS` key -- there would be no cutoff to normalise it by.
+
+    Example
+    -------
+    >>> fig = plot_threshold_margins({'ipsae_d0res': 0.64, 'iptm_d0chn': 0.82,
+    ...                               'pdockq': 0.24, 'pdockq2': 0.33,
+    ...                               'lis': 0.48})
+    >>> len(fig.axes[0].get_yticklabels())
+    5
+    """
+    names = tuple(AGREEMENT_SCORES) if score_names is None else tuple(score_names)
+    display = dict(SCORE_DISPLAY_NAMES if labels is None else labels)
+
+    missing = [name for name in names if name not in scores]
+    if missing:
+        raise KeyError(f"No value supplied for: {', '.join(missing)}.")
+    unknown = [name for name in names if name not in THRESHOLDS]
+    if unknown:
+        raise KeyError(
+            f"No canonical threshold for: {', '.join(unknown)}. "
+            f"Expected keys from THRESHOLDS: {', '.join(sorted(THRESHOLDS))}."
+        )
+
+    fig = Figure(figsize=figsize)
+    ax = fig.subplots()
+
+    # Top row at the top: matplotlib counts y upwards, so the display order is
+    # reversed here rather than in the caller.
+    order = list(reversed(names))
+    y_pos = np.arange(len(order), dtype=float)
+
+    for y, name in zip(y_pos, order):
+        threshold = THRESHOLDS[name]
+        value = float(scores[name])
+        margin = value / threshold.green
+        band = threshold.confidence_band(value)
+        colour = BAND_COLOUR_HEX[band.colour]
+
+        clipped = margin > axis_cap
+        drawn = min(margin, axis_cap)
+        # A thin bar plus an end mark: the bar carries the magnitude, the mark
+        # says whether that end is the value or the edge of the axis. A round
+        # dot means the value is where it looks; an arrowhead means the score
+        # runs past the axis and the printed number is the one to read.
+        ax.plot([0, drawn], [y, y], color=colour, linewidth=3.0,
+                solid_capstyle='butt' if clipped else 'round', zorder=3)
+        ax.plot([drawn], [y], marker='>' if clipped else 'o',
+                markersize=10 if clipped else 9, color=colour,
+                markeredgecolor='white', markeredgewidth=1.4, zorder=4)
+
+        # The band name travels with the colour, so the verdict is never
+        # carried by colour alone. A label that would run off the right-hand
+        # edge is set inside the bar instead, stroked in white so it stays
+        # legible over the fill.
+        label_text = f'{value:.3f}  {band.label}  ({margin:.2f}x)'
+        # A soft knockout behind the text, so neither the grid nor the
+        # threshold rule shows through the glyphs.
+        knockout = dict(facecolor='white', edgecolor='none', alpha=0.8,
+                        boxstyle='square,pad=0.15')
+        if drawn + 0.03 + 0.011 * len(label_text) < axis_cap:
+            ax.text(drawn + 0.05, y, label_text, va='center', ha='left',
+                    fontsize=8, color='#333', zorder=6, bbox=knockout)
+        else:
+            # Sit the label above the bar rather than on it: a white stroke
+            # over a coloured fill is legible but ugly, and there is a clear
+            # row of space here because the rows are a whole unit apart.
+            ax.text(drawn - 0.03, y + 0.24, label_text, va='bottom',
+                    ha='right', fontsize=8, color='#333', zorder=6,
+                    bbox=knockout)
+
+        # The amber edge, in the same units, so the three bands are visible per
+        # row rather than only the one the score landed in.
+        ax.plot([threshold.amber / threshold.green], [y], marker='|',
+                markersize=11, color='#9E9E9E', markeredgewidth=1.4, zorder=2)
+
+    ax.axvline(1.0, color='#424242', linewidth=1.2, zorder=1)
+    ax.text(1.03, -0.64, 'green threshold', fontsize=8, color='#424242',
+            ha='left', va='bottom')
+
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(
+        [
+            f'{display.get(name, name)}\n'
+            f'green {THRESHOLDS[name].green:g} · '
+            f'{THRESHOLDS[name].green_provenance.lower()}'
+            for name in order
+        ],
+        fontsize=8,
+    )
+    ax.set_xlim(0, axis_cap)
+    ax.set_ylim(-0.7, len(order) - 0.3)
+    ax.set_xlabel('score ÷ its own green threshold\n'
+                  '(1.0 = exactly at the cutoff; grey tick = the amber edge)',
+                  fontsize=9)
+    ax.set_title('Distance from threshold, all five on one scale', fontsize=11)
+    ax.grid(axis='x', linestyle=':', linewidth=0.6, alpha=0.5)
+    ax.set_axisbelow(True)
+    for spine in ('top', 'right', 'left'):
+        ax.spines[spine].set_visible(False)
 
     fig.tight_layout()
     return fig

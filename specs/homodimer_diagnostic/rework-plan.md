@@ -97,7 +97,7 @@ ipSAE_d0chn), `:116-136` (the two `d0` helpers), `:751-756` (the `n0dom` sets), 
 plus three citation defects and three completeness gaps, all recorded in the document's
 "Corrections to the draft audit" section. The substantive omission is promoted to R007 below.
 
-### `[ ] R002b — Use the AFDB bands report to fill prose gaps only`
+### `[x] R002b — Use the AFDB bands report to fill prose gaps only` — DONE 2026-09-08
 
 **Scope, set by the user 2026-09-08: the thresholds are settled and do not change.** The
 report is a source for the explanatory material that is currently missing, and for nothing
@@ -320,7 +320,7 @@ supplied the maximum, matching `ipsae.py`'s `n0dom_max` / `d0dom_max` logic (L86
 
 **Done when.** `ipSAE_d0dom` matches `ipsae.py` within ±0.001 on both fixtures.
 
-### `[ ] R004 — Rename ipTM to ipTM_d0chn in all user-facing text`
+### `[x] R004 — Rename ipTM to ipTM_d0chn in all user-facing text` — DONE 2026-09-08
 
 **What.** The notebook's "ipTM" is `ipTM_d0chn`, a reimplementation. AlphaFold's own
 `ipTM_af` is a different number that AFDB does not expose in these endpoints.
@@ -1434,7 +1434,7 @@ clean with six Mol* views.
 > User note: *"the traffic light system is great. Just need to make sure we are using the
 > right values or scores when describing each metric."*
 
-### `[ ] R080 — Wire the summary to the canonical thresholds`
+### `[x] R080 — Wire the summary to the canonical thresholds` — DONE 2026-09-08
 
 **What.** Cells 26 and 28 both read `THRESHOLDS` from the module (R002). Delete cell 28's
 `green/2` amber recomputation, which is the direct cause of the table and the prose being
@@ -1460,7 +1460,7 @@ Two specific statements the notebook must make (user, 2026-09-07):
 publication or the AFDB calibration behind it. None of the four papers defines a middle band
 at all, so the amber tier is this notebook's own construct and should be presented that way.
 
-### `[ ] R081 — Audit the metric descriptions`
+### `[x] R081 — Audit the metric descriptions` — DONE 2026-09-08
 
 **Supporting notes.** Cell 26's `descriptions` dict is mostly sound but has issues to check
 against R001: "ipTM: All PAE cells used, no cutoff" is correct but should say `ipTM_d0chn`
@@ -1469,7 +1469,7 @@ count, and the pLDDT is a mean over the union of contacting residues in both cha
 "ipSAE_d0chn: Penalises small interfaces more" needs checking — a larger `L` gives a larger
 `d0`, which is *more* lenient, so the direction of that claim may be backwards.
 
-### `[ ] R082 — Review the agreement matrix`
+### `[x] R082 — Review the agreement matrix` — DONE 2026-09-08
 
 **Supporting notes.** Cell 27 normalises each score by its own green threshold and caps at
 1.5, then plots pairwise absolute differences. That makes the matrix depend entirely on the
@@ -1584,6 +1584,47 @@ that the contact map and every score are unaffected.
 
 54 cells, 32 code cells, 0 errors on all four fixtures, 283 doctests.
 
+
+**M7a outcome, 2026-09-08 (R080 + R081 + R082 + R002b/R004 remainders).**
+
+**The self-contradiction is fixed structurally, not by patching a conditional.** FX-008 printed
+"consistently HIGH confidence across all metrics" while its own table showed
+`ipSAE_d0res 0.6366` in amber — twice in four lines. Cause: `if n_green >= 4` over five scores.
+Now one `ConfidenceSummary` object is built by `summarise_scores()`, and the table, the margin
+plot and the prose are three renderings of it. There is no second path that could reach a
+different verdict. Verified on all six fixtures: table and prose agree, and the phrase is gone.
+
+**The agent caught me repeating an error I had already corrected.** My brief told it to state
+that 0.6 came from "a data-driven analysis of ~31 million candidate complexes".
+`threshold-reference.md` §0.2 records that this is wrong — 0.6 was **adopted by citation** as
+community-established, **validated** on 230/117 and 94/250 post-training benchmarks, and
+**applied** at ~31M scale. The agent wrote the accurate version and said why. The plan was
+right; my brief regressed against it.
+
+**R082: the agreement matrix is replaced, with an argument.** `|ai - aj|` over scalars is a
+distance matrix over points on a line: 25 cells re-encoding 5 numbers. Worse, `cap=1.5` made
+two scores comfortably past threshold register as agreeing *perfectly* — so the figure was
+closest to blank on the AFDB path, which is the notebook's main path. Replaced by
+`plot_threshold_margins`: five bars on one axis, each normalised by its own green threshold,
+where the gap between rows *is* the pairwise difference. It restores which side of the cutoff
+each score falls on and how far past, with provenance in the tick label. The loss (one
+glanceable cell per pair) is stated in the notebook rather than hidden.
+
+**R081 found a second wrong description, not just the known one.** `LIS: "Density of
+inter-chain PAE < 12"` is wrong — the mean runs only over sub-cutoff cells, so the count never
+enters, and a single cell at PAE 0 scores 1.0. It measures how far below the cutoff the
+confident cells sit, not how many there are. Also corrected: pDockQ ("+" should be a product of
+mean pLDDT and log10 of contact **pairs**), pDockQ2 (a product, and the PAE term is a mean of
+the TM transform, not a mean PAE), and `ipsae_d0res` ("primary AFDB classifier" -> one **half**
+of the release criterion, which is the conjunction).
+
+**An HTML injection bug found and fixed.** `PAE < 10` in a description and `0.55 < 0.60` in a
+FAIL reason both contain a raw `<`, which a browser reads as an opening tag and silently eats
+along with everything after it. Confirmed in rendered FX-008 output. All interpolated strings
+in `format_summary_table_html` are now escaped.
+
+299 doctests. Six fixtures execute clean. Scores numerically identical.
+
 ## Milestones and execution order
 
 46 tasks in 8 milestones. Execution model, agreed with the user 2026-09-07: each task goes to
@@ -1599,7 +1640,7 @@ review.
 | M4 | Scoring correctness + Section 4 | R003-R008, R060-R062 | 9 | **COMPLETE** 2026-09-08 |
 | M5 | PAE visuals | R050-R052 | 3 | **COMPLETE** 2026-09-08 |
 | M6 | 3D views | R070-R075, R030 | 7 | **COMPLETE** 2026-09-08 |
-| M7 | Summary + prose | R080-R082, R040 | 4 | |
+| M7 | Summary + prose | R080-R082, R002b, R004, R040 | 6 | R080, R081, R082, R002b, R004 done; **R040 remains** |
 | M8 | Validation, docs, cleanup | R090-R095 | 6 | |
 
 Rationale for the ordering. M1 first because every number downstream depends on it, and it
