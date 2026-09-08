@@ -137,6 +137,7 @@ __all__ = [
     "download_structure",
     "download_pae",
     "download_plddt",
+    "format_metadata_report",
     # structure parsing
     "ChainCoords",
     "parse_mmcif_atoms",
@@ -303,31 +304,77 @@ _SHARED_DOCUMENT_FIELDS: Tuple[str, ...] = ("cifUrl", "bcifUrl", "paeDocUrl", "p
 every per-chain entry. Read through `AFDBPrediction.document_url`, which checks
 the agreement rather than assuming it."""
 
+_UNSET: Any = object()
+"""Sentinel distinguishing "no default given" from a default of `None`, so that
+`shared_field('modelVersion')` can raise while `shared_field(..., default=None)`
+returns `None`."""
+
 
 @dataclass(frozen=True, eq=False)
 class AFDBPrediction:
     """
     The whole prediction-endpoint response, with every per-chain entry preserved.
 
-    The endpoint returns **one entry per chain**, and for the fixtures checked so
-    far `entries[0]` is chain *B*, not chain A. Collapsing to `entries[0]` is
-    therefore a real bug for heterodimers: it reports one chain's sequence, gene
-    and UniProt accession as if they were the complex's. This carrier exists so
-    that the fix is a change of *which entry a caller asks for*, not a rewrite of
-    the fetch path.
+    The endpoint returns **one entry per chain**, and the order it returns them in
+    is *non-deterministic*: the same accession answers `['A', 'B']` on one call and
+    `['B', 'A']` on the next. Positional access is therefore not merely wrong for a
+    heterodimer, it is wrong *intermittently* -- the UniProt accession, organism,
+    protein name, gene and monomer length shown for an unchanged notebook could
+    flip between chains from one run to the next. Two defences (R020):
+
+    - `entries` is sorted by `chainId` at construction, so arrival order is thrown
+      away before any caller can accidentally depend on it;
+    - chain-specific fields are reachable only through `entry_for_chain` /
+      `chain_field`, which raise `KeyError` for a chain the endpoint did not
+      describe rather than quietly handing back another chain's identity.
+
+    Whole-complex fields (the document URLs, the assembly type, the model version)
+    go through `shared_field`, which checks that the entries agree instead of
+    trusting whichever one happened to arrive first.
 
     Attributes:
         accession: The `AF-...` accession that was requested.
-        entries:   Every entry the endpoint returned, in API order.
+        entries:   Every entry the endpoint returned, sorted by `chainId`.
+
+    Example
+    -------
+    >>> shuffled = AFDBPrediction('AF-1', ({'chainId': 'B', 'gene': 'Sumo1'},
+    ...                                    {'chainId': 'A', 'gene': 'ISG20'}))
+    >>> shuffled.chain_ids
+    ('A', 'B')
+    >>> shuffled.chain_field('A', 'geneNames', 'gene')
+    'ISG20'
+    >>> shuffled.entry_for_chain('C')
+    Traceback (most recent call last):
+    KeyError: "No metadata entry for chain 'C' in AF-1; the endpoint described chains A, B."
     """
 
     accession: str
     entries: Tuple[Dict[str, Any], ...]
 
+    def __post_init__(self) -> None:
+        # Sorting here, rather than at each call site, is what makes "never code
+        # against the endpoint's order" structural instead of a convention.
+        object.__setattr__(
+            self,
+            "entries",
+            tuple(sorted(self.entries, key=lambda entry: str(entry.get("chainId", "")))),
+        )
+
     @property
     def chain_ids(self) -> Tuple[str, ...]:
-        """`chainId` of each entry, in API order (so typically `('B', 'A')`)."""
+        """`chainId` of each entry, sorted -- never the endpoint's arrival order."""
         return tuple(str(entry.get("chainId", "")) for entry in self.entries)
+
+    def describes_chain(self, chain_id: str) -> bool:
+        """
+        Whether the endpoint returned an entry for this chain.
+
+        The structure may carry chains the metadata does not describe (and the
+        reverse), so a caller that wants to report the gap rather than fail on it
+        asks this first.
+        """
+        return chain_id in self.chain_ids
 
     def entry_for_chain(self, chain_id: str) -> Dict[str, Any]:
         """
@@ -340,33 +387,90 @@ class AFDBPrediction:
             That chain's entry.
 
         Raises:
-            KeyError: If no entry carries that `chainId`.
+            KeyError: If no entry carries that `chainId`. Failing is the point:
+                the alternative is reporting some other chain's identity, or empty
+                fields, as if they belonged to this one.
         """
         for entry in self.entries:
             if str(entry.get("chainId", "")) == chain_id:
                 return entry
+        described = ", ".join(self.chain_ids) or "(none)"
         raise KeyError(
-            f"No entry for chain {chain_id!r} in {self.accession}; "
-            f"available: {', '.join(self.chain_ids) or '(none)'}."
+            f"No metadata entry for chain {chain_id!r} in {self.accession}; "
+            f"the endpoint described chains {described}."
         )
 
-    @property
-    def primary_entry(self) -> Dict[str, Any]:
+    def chain_field(self, chain_id: str, *names: str, default: Any = None) -> Any:
         """
-        The entry used for whole-complex display fields.
+        One chain's value for the first of `names` that entry actually carries.
 
-        Note:
-            Currently the first entry, which reproduces the notebook's existing
-            behaviour exactly. That is wrong for heterodimers; see the TODO below.
+        The fallback chain exists because the endpoint's field names are not
+        stable across records: `proteinFullName` is documented but the live
+        service sends `uniprotDescription`, and `geneNames` arrives as `gene`.
+
+        Args:
+            chain_id: Structure chain label.
+            names:    Field names, tried in order.
+            default:  Returned when the entry carries none of them.
+
+        Returns:
+            The value, or `default`.
+
+        Raises:
+            KeyError: If the endpoint described no such chain.
         """
-        # TODO(R020): per-chain selection goes here. Replace this with a lookup
-        # keyed on the chain being described -- `entry_for_chain(chain_id)` --
-        # and report sequence / geneNames / proteinFullName / uniprotAccession /
-        # monomer length once per chain instead of once per complex. The
-        # document URLs are unaffected: they are identical across entries.
-        if not self.entries:
-            raise ValueError(f"No prediction entries returned for {self.accession}.")
-        return self.entries[0]
+        entry = self.entry_for_chain(chain_id)
+        for name in names:
+            value = entry.get(name)
+            if value is not None and value != "":
+                return value
+        return default
+
+    def shared_field(self, *names: str, default: Any = _UNSET) -> Any:
+        """
+        A whole-complex value, checked for agreement across the per-chain entries.
+
+        Args:
+            names:   Field names, tried in order within each entry.
+            default: Returned when no entry carries any of them. Omit it to raise
+                     `KeyError` instead.
+
+        Returns:
+            The single agreed value.
+
+        Raises:
+            ValueError: If the entries disagree, which means the field is
+                per-chain after all and reporting it once would be a lie.
+            KeyError: If absent from every entry and no `default` was given.
+
+        Example
+        -------
+        >>> pred = AFDBPrediction('AF-1', ({'chainId': 'A', 'assemblyType': 'Homo'},
+        ...                                {'chainId': 'B', 'assemblyType': 'Homo'}))
+        >>> pred.shared_field('assemblyType')
+        'Homo'
+        >>> pred.shared_field('oligomericState', default='N/A')
+        'N/A'
+        """
+        found: Dict[str, Any] = {}
+        for entry in self.entries:
+            for name in names:
+                value = entry.get(name)
+                if value is not None and value != "":
+                    found.setdefault(str(value), value)
+                    break
+        if not found:
+            if default is _UNSET:
+                raise KeyError(
+                    f"{' / '.join(names)} is absent from every entry of {self.accession}."
+                )
+            return default
+        if len(found) > 1:
+            raise ValueError(
+                f"{' / '.join(names)} differs between chains of {self.accession}: "
+                f"{sorted(found)}. It was assumed to describe the whole complex."
+            )
+        return next(iter(found.values()))
 
     def document_url(self, field: str) -> str:
         """
@@ -385,15 +489,7 @@ class AFDBPrediction:
                 chain's document and slice it as if it covered the complex.
             KeyError: If the field is absent from every entry.
         """
-        values = {entry[field] for entry in self.entries if entry.get(field)}
-        if not values:
-            raise KeyError(f"{field!r} is absent from every entry of {self.accession}.")
-        if len(values) > 1:
-            raise ValueError(
-                f"{field!r} differs between chains of {self.accession}: {sorted(values)}. "
-                "Whole-complex documents were assumed identical across entries."
-            )
-        return str(values.pop())
+        return str(self.shared_field(field))
 
     @property
     def cif_url(self) -> str:
@@ -494,6 +590,191 @@ def download_pae(prediction: AFDBPrediction, timeout: float = DEFAULT_TIMEOUT) -
 def download_plddt(prediction: AFDBPrediction, timeout: float = DEFAULT_TIMEOUT) -> Any:
     """Download the raw pLDDT JSON for a prediction. Feed it to `parse_plddt`."""
     return download_json(prediction.plddt_url, timeout=timeout)
+
+
+# --- metadata reporting (R020) ---------------------------------------------
+# The report is a pure function returning a string rather than a pile of
+# `print` calls, so that "the same input renders the same text" is something a
+# caller can assert instead of something a reader has to eyeball.
+
+_REPORT_WIDTH: int = 59
+"""Rule width for `format_metadata_report`; sized to the longest protein name
+seen on the fixtures."""
+
+_REPORT_LABEL_WIDTH: int = 14
+"""Column width of the label before the `:` in the report."""
+
+
+def _chain_identity(prediction: AFDBPrediction, chain_id: str) -> Tuple[Tuple[str, str], ...]:
+    """
+    One chain's display identity, as ordered `(label, value)` rows.
+
+    Chains whose rows are equal are the same protein, which is what lets the
+    report collapse a homodimer into one block without a homo/hetero switch (D3).
+    """
+    accession = prediction.chain_field(chain_id, "uniprotAccession")
+    entry_name = prediction.chain_field(chain_id, "uniprotId")
+    if accession and entry_name:
+        uniprot = f"{accession} ({entry_name})"
+    else:
+        uniprot = str(accession or entry_name or "N/A")
+    return (
+        ("UniProt", uniprot),
+        ("Protein", str(prediction.chain_field(
+            chain_id, "proteinFullName", "uniprotDescription", default="N/A"))),
+        ("Gene", str(prediction.chain_field(
+            chain_id, "geneNames", "gene", default="N/A"))),
+        ("Organism", str(prediction.chain_field(
+            chain_id, "organismScientificName", "organism", default="N/A"))),
+    )
+
+
+def format_metadata_report(
+    prediction: Optional[AFDBPrediction],
+    chain_lengths: Mapping[str, int],
+    accession: Optional[str] = None,
+    width: int = _REPORT_WIDTH,
+) -> str:
+    """
+    Render the complex's metadata, with every identity field attributed to a chain.
+
+    The prediction endpoint describes one chain per entry, so UniProt accession,
+    protein name, gene, organism and monomer length are *chain* facts, not complex
+    facts, and this report never presents one chain's as the complex's (R020).
+    Chains that share an identity are collapsed into a single block, so a
+    homodimer reads as one protein in two chains while a heterodimer shows both --
+    the same code path either way, with no user-facing switch (D3). Nothing is
+    keyed on chain position or on the endpoint's entry order (D4).
+
+    Args:
+        prediction:    The fetched metadata, or `None` in local-file mode, where
+                       the complex-level geometry is still reported and the
+                       missing identity is stated rather than shown as `N/A`.
+        chain_lengths: `{chain_id: n_residues}` from the structure or PAE, in the
+                       order the chains should be reported.
+        accession:     Overrides the accession line; defaults to the prediction's.
+        width:         Rule width.
+
+    Returns:
+        The report as a newline-joined string, with no trailing newline.
+
+    Example
+    -------
+    >>> hetero = AFDBPrediction('AF-1', (
+    ...     {'chainId': 'B', 'uniprotAccession': 'P63166', 'gene': 'Sumo1'},
+    ...     {'chainId': 'A', 'uniprotAccession': 'Q96AZ6', 'gene': 'ISG20'}))
+    >>> report = format_metadata_report(hetero, {'A': 181, 'B': 101})
+    >>> [line for line in report.splitlines() if line.startswith('Chain')]
+    ['Chain A       : 181 residues', 'Chain B       : 101 residues']
+
+    Entry order cannot reach the output, because `AFDBPrediction` sorts entries
+    at construction:
+
+    >>> jumbled = AFDBPrediction('AF-1', tuple(reversed(hetero.entries)))
+    >>> format_metadata_report(jumbled, {'A': 181, 'B': 101}) == report
+    True
+
+    Identical chains collapse into one block:
+
+    >>> homo = AFDBPrediction('AF-2', ({'chainId': 'A', 'uniprotAccession': 'P0A6Q3'},
+    ...                                {'chainId': 'B', 'uniprotAccession': 'P0A6Q3'}))
+    >>> [line for line in format_metadata_report(homo, {'A': 172, 'B': 172}).splitlines()
+    ...  if line.startswith('Chain')]
+    ['Chains A, B   : 172 residues each']
+
+    A structure chain the endpoint never described is named as such, not blanked:
+
+    >>> partial = AFDBPrediction('AF-3', ({'chainId': 'A', 'uniprotAccession': 'P1'},))
+    >>> [line for line in format_metadata_report(partial, {'A': 10, 'B': 10}).splitlines()
+    ...  if 'no AFDB' in line]
+    ['  no AFDB metadata entry for this chain (endpoint described: A)']
+    """
+    lengths = {str(chain_id): int(n) for chain_id, n in chain_lengths.items()}
+    chain_ids = list(lengths)
+
+    def row(label: str, value: str, indent: int = 0) -> str:
+        pad = " " * indent
+        return f"{pad}{label:<{max(_REPORT_LABEL_WIDTH - indent, 1)}}: {value}"
+
+    # Group chains by identity. Insertion order follows `chain_lengths`, so the
+    # report order is the caller's chain order and never the endpoint's.
+    groups: List[Tuple[Tuple[Tuple[str, str], ...], List[str]]] = []
+    undescribed: List[str] = []
+    if prediction is not None:
+        for chain_id in chain_ids:
+            if not prediction.describes_chain(chain_id):
+                undescribed.append(chain_id)
+                continue
+            identity = _chain_identity(prediction, chain_id)
+            for key, members in groups:
+                if key == identity:
+                    members.append(chain_id)
+                    break
+            else:
+                groups.append((identity, [chain_id]))
+
+    if prediction is None:
+        assembly = "not fetched (local file mode)"
+        version = "not fetched (local file mode)"
+    else:
+        kind = prediction.shared_field("assemblyType", default=None)
+        if kind is None:
+            # Derivable from the identity grouping when the endpoint omits it --
+            # but only when every chain was actually described.
+            if undescribed or not groups:
+                kind = "Unknown"
+            else:
+                kind = "Homo" if len(groups) == 1 else "Hetero"
+        state = prediction.shared_field("oligomericState", default=None)
+        distinct = len(groups)
+        described = f", {len(chain_ids) - len(undescribed)} described" if undescribed else ""
+        assembly = (
+            f"{kind}{' ' + str(state) if state else ''} "
+            f"({len(chain_ids)} chains{described}, {distinct} distinct "
+            f"protein{'' if distinct == 1 else 's'})"
+        )
+        version = str(prediction.shared_field("modelVersion", "latestVersion",
+                                              default="N/A"))
+
+    lines: List[str] = ["=" * width, "COMPLEX METADATA REPORT", "=" * width]
+    lines.append(row("Accession", str(
+        accession or (prediction.accession if prediction is not None else "N/A"))))
+    lines.append(row("Assembly", assembly))
+    lines.append(row("Model version", version))
+    lines.append(row("Total length", f"{sum(lengths.values())} residues ("
+                     + ", ".join(f"{c}: {lengths[c]}" for c in chain_ids) + ")"))
+    lines.append("-" * width)
+
+    if prediction is None:
+        lines.append(row("Chains", ", ".join(chain_ids) or "(none)"))
+        lines.append("  no AFDB metadata was fetched, so the protein identity of "
+                     "each chain")
+        lines.append("  is unknown here rather than defaulted")
+    else:
+        for identity, members in groups:
+            head = (f"Chain {members[0]}" if len(members) == 1
+                    else "Chains " + ", ".join(members))
+            sizes = {lengths[c] for c in members}
+            if len(members) == 1:
+                size = f"{lengths[members[0]]} residues"
+            elif len(sizes) == 1:
+                size = f"{sizes.pop()} residues each"
+            else:
+                size = ", ".join(f"{c}: {lengths[c]}" for c in members) + " residues"
+            lines.append(row(head, size))
+            for label, value in identity:
+                lines.append(row(label, value, indent=2))
+        for chain_id in undescribed:
+            lines.append(row(f"Chain {chain_id}", f"{lengths[chain_id]} residues"))
+            lines.append("  no AFDB metadata entry for this chain (endpoint "
+                         f"described: {', '.join(prediction.chain_ids) or '(none)'})")
+        extra = [c for c in prediction.chain_ids if c not in lengths]
+        if extra:
+            lines.append(row("Note", "AFDB metadata also describes chains absent "
+                                     f"from the structure: {', '.join(extra)}"))
+
+    lines.append("=" * width)
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------

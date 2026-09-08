@@ -672,7 +672,7 @@ magic registers them; the notebook no longer imports pyplot at all.
 > User note: *"Make sure to test notebook on heterodimers too, as it's only really been
 > tested on homodimers at the time of writing it."* Plus D3: works automatically, everywhere.
 
-### `[ ] R020 — Fix the metadata chain-selection bug`
+### `[x] R020 — Fix the metadata chain-selection bug` — DONE 2026-09-08
 
 **What.** Cell 6 does `meta = entries[0]`. The AFDB prediction endpoint returns **one entry
 per chain**, and for the fixtures I checked **chain B comes first**.
@@ -779,6 +779,40 @@ Verified candidates:
 `AF-0000000211034637` is the one I will use for per-task verification under D5.
 
 ---
+
+
+**R020 outcome, 2026-09-08.** Fixed structurally rather than by convention: `AFDBPrediction`
+now **sorts `entries` by `chainId` in `__post_init__`**, so arrival order is discarded before
+any caller can observe it. `primary_entry` is gone entirely — grep across `src/` and
+`notebooks/` returns no matches — along with its two notebook call sites.
+
+**The bug, measured.** Eight consecutive endpoint calls per accession returned mixed
+`['A','B']` / `['B','A']` orders for both fixtures. Before the fix, the heterodimer report
+flipped five identity fields wholesale between runs of an unchanged notebook: UniProt Q96AZ6
+vs P63166, organism *Homo sapiens* vs *Mus musculus*, protein ISG20 vs SUMO1, monomer length
+181 vs 101.
+
+**Determinism proven.** Ten live fetches per fixture across both arrival orders produced one
+distinct report each, by SHA-256. Independently re-verified by the orchestrator over six more
+fetches: one distinct hash, matching the agent's.
+
+**Report design satisfies D3 with no user-facing switch.** Chains resolving to the same
+identity collapse into one block, so a homodimer does not repeat itself; a heterodimer expands
+to two. Same code path either way.
+
+**New module API:** `format_metadata_report()` (a pure function, which is what made the
+determinism assertion possible), `chain_field()`, `shared_field()` (raises when entries
+disagree, rather than trusting entry 0), `describes_chain()`.
+
+**Two incidental fixes.** `Gene` and `Model version` previously printed `N/A` on every run
+because the live service sends `gene` and `latestVersion`, not the `geneNames` and
+`modelVersion` that `CLAUDE.md` documents. Both now resolve. **R093 must correct the
+`CLAUDE.md` field table**, which is wrong about both names.
+
+**Missing-chain handling is now explicit**, exercised live: a structure chain the endpoint did
+not describe prints a note under its own header and downgrades the assembly line; a metadata
+chain absent from the structure is flagged; `entry_for_chain` on an unknown chain raises with
+the list of chains that were described.
 
 ## W3 — Section 2, Interface Detection
 
@@ -1124,7 +1158,7 @@ review.
 |---|-----------|-------|---|--------|
 | M1 | Ground truth | R001, R002, R002b, R009 | 4 | R002b added 2026-09-08 |
 | M2 | Module extracted; notebook shrunk 54% | R010, R010b, R011-R016 | 8 | **COMPLETE** 2026-09-08 |
-| M3 | Heterodimer support | R020-R024 | 5 | |
+| M3 | Heterodimer support | R020-R024 | 5 | R020 done |
 | M4 | Scoring correctness + Section 4 | R003-R008, R060-R062 | 9 | R003, R005, R006, R007 landed early in R012 |
 | M5 | PAE visuals | R050-R052 | 3 | |
 | M6 | 3D views | R070-R075, R030 | 7 | |
