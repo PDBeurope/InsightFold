@@ -151,6 +151,11 @@ __all__ = [
     "PLDDTScores",
     "parse_plddt",
     "verify_chain_lengths",
+    "verify_document_agreement",
+    # chain labelling (R021)
+    "ChainLabel",
+    "ChainIdentity",
+    "verify_chain_identity",
     # interface detection
     "InterfaceContacts",
     "detect_interface",
@@ -235,6 +240,7 @@ __all__ = [
     "MVS_DISAGREEMENT_THRESHOLD",
     "MVS_DISAGREEMENT_CATEGORIES",
     "MVS_VIEW_LABELS",
+    "format_view_label",
     # MolViewSpec: structure source
     "StructureSource",
     "resolve_structure_source",
@@ -1436,6 +1442,34 @@ def parse_plddt(
     return PLDDTScores(scores=scores, residue_numbers=residue_numbers, spans=spans)
 
 
+def _document_kind(document: "PAEMatrix | PLDDTScores") -> str:
+    """`'PAE'` or `'pLDDT'`, so an error message can name the guilty document."""
+    return "PAE" if isinstance(document, PAEMatrix) else "pLDDT"
+
+
+_MAPPING_REFUSAL: str = (
+    "Refusing to pair these chains positionally. Neither source carries an order "
+    "that could be mapped on: the documents' 'chains' arrays are re-sorted by "
+    "chain id here precisely because their arrival order is not authoritative, "
+    "and the AFDB prediction endpoint returns its per-chain entries in a "
+    "demonstrably non-deterministic order (R020). A positional pairing would "
+    "therefore be a guess, and a wrong guess mis-slices every PAE quadrant into "
+    "plausible-looking but wrong scores rather than an error. Chain length is no "
+    "tie-breaker either: a homodimer's chains are the same length by definition."
+)
+"""Why a chain-id mismatch fails instead of falling back to positional mapping.
+
+Shared by every mismatch message so the reasoning is stated once (R021)."""
+
+_MISMATCH_REMEDY: str = (
+    "Check that the mmCIF, the PAE document and the pLDDT document are all for "
+    "the same accession and model version -- mixing files from two predictions, "
+    "or re-uploading one of the three in local-file mode, is the usual cause. "
+    "Fetch all three from one AFDBPrediction if in doubt."
+)
+"""What the user should actually do about a mismatch."""
+
+
 def verify_chain_lengths(
     chains: Mapping[str, ChainCoords],
     document: PAEMatrix | PLDDTScores,
@@ -1455,7 +1489,9 @@ def verify_chain_lengths(
         The agreed `{chain_id: n_residues}`.
 
     Raises:
-        ValueError: If the chain sets or any length disagree.
+        ValueError: If the chain sets or any length disagree. The message names
+            the two chain sets, or the disagreeing lengths, says why a
+            positional fallback is refused, and says what to check.
 
     Example
     -------
@@ -1470,14 +1506,42 @@ def verify_chain_lengths(
     ...                            np.zeros(1, dtype=np.float32))}
     >>> verify_chain_lengths(chains, doc)
     {'A': 2, 'B': 1}
+
+    A chain the document does not describe is named, not skipped:
+
+    >>> del chains['B']
+    >>> chains['C'] = ChainCoords('C', np.zeros((1, 3), dtype=np.float32),
+    ...                           np.array([1]), np.array(['GLY']),
+    ...                           np.zeros(1, dtype=np.float32))
+    >>> verify_chain_lengths(chains, doc)      # doctest: +ELLIPSIS
+    Traceback (most recent call last):
+    ValueError: Chain identity mismatch between the structure and the pLDDT document.
+      structure chains : A, C
+      pLDDT chains     : A, B
+      only in structure: C
+      only in pLDDT    : B
+    Refusing to pair these chains positionally...
     """
+    kind = _document_kind(document)
     from_structure = {chain_id: chain.n_residues for chain_id, chain in chains.items()}
     from_document = {span.chain_id: span.length for span in document.spans}
 
     if set(from_structure) != set(from_document):
+        only_structure = sorted(set(from_structure) - set(from_document))
+        only_document = sorted(set(from_document) - set(from_structure))
+        rows = (
+            ("structure chains", sorted(from_structure)),
+            (f"{kind} chains", sorted(from_document)),
+            ("only in structure", only_structure),
+            (f"only in {kind}", only_document),
+        )
+        detail = "\n".join(
+            f"  {label:<17}: {', '.join(ids) or '(none)'}" for label, ids in rows
+        )
         raise ValueError(
-            f"Chain sets disagree: structure has {sorted(from_structure)}, "
-            f"document has {sorted(from_document)}."
+            f"Chain identity mismatch between the structure and the {kind} document.\n"
+            f"{detail}\n"
+            f"{_MAPPING_REFUSAL}\n{_MISMATCH_REMEDY}"
         )
     disagreeing = {
         chain_id: (from_structure[chain_id], from_document[chain_id])
@@ -1485,12 +1549,433 @@ def verify_chain_lengths(
         if from_structure[chain_id] != from_document[chain_id]
     }
     if disagreeing:
-        detail = ", ".join(
-            f"{chain_id}: structure={s}, document={d}"
+        detail = "\n".join(
+            f"  chain {chain_id}: structure {s} residues, {kind} {d} residues"
             for chain_id, (s, d) in sorted(disagreeing.items())
         )
-        raise ValueError(f"Chain lengths disagree ({detail}).")
+        raise ValueError(
+            f"Chain length mismatch between the structure and the {kind} document.\n"
+            f"{detail}\n"
+            f"Every quadrant slice and every per-chain pLDDT slice is cut at these "
+            f"offsets, so continuing would score one chain against the wrong "
+            f"residues and report a number rather than an error.\n"
+            f"{_MISMATCH_REMEDY}"
+        )
     return dict(sorted(from_structure.items()))
+
+
+def verify_document_agreement(pae: PAEMatrix, plddt: PLDDTScores) -> Dict[str, int]:
+    """
+    Check the PAE and pLDDT documents describe the same chains at the same lengths.
+
+    `verify_chain_lengths` compares each document against the *structure*, which
+    already makes them agree transitively -- but only when both calls are made,
+    and only when a structure is present. This is the direct check, so the third
+    edge of the triangle is closed explicitly rather than by inference (R021).
+
+    Args:
+        pae:   The parsed PAE document.
+        plddt: The parsed pLDDT document.
+
+    Returns:
+        The agreed `{chain_id: n_residues}`.
+
+    Raises:
+        ValueError: If the chain sets or any length disagree.
+
+    Example
+    -------
+    >>> spans = (ChainSpan('A', 1, 2), ChainSpan('B', 1, 1))
+    >>> pae = PAEMatrix(np.zeros((3, 3), dtype=np.float32), 30.0, spans)
+    >>> plddt = PLDDTScores(np.zeros(3, dtype=np.float32),
+    ...                     np.zeros(3, dtype=np.int32), spans)
+    >>> verify_document_agreement(pae, plddt)
+    {'A': 2, 'B': 1}
+    """
+    from_pae = {span.chain_id: span.length for span in pae.spans}
+    from_plddt = {span.chain_id: span.length for span in plddt.spans}
+
+    if set(from_pae) != set(from_plddt):
+        raise ValueError(
+            f"Chain identity mismatch between the PAE and pLDDT documents.\n"
+            f"  PAE chains  : {', '.join(sorted(from_pae)) or '(none)'}\n"
+            f"  pLDDT chains: {', '.join(sorted(from_plddt)) or '(none)'}\n"
+            f"{_MAPPING_REFUSAL}\n{_MISMATCH_REMEDY}"
+        )
+    disagreeing = sorted(
+        chain_id for chain_id in from_pae if from_pae[chain_id] != from_plddt[chain_id]
+    )
+    if disagreeing:
+        detail = "\n".join(
+            f"  chain {chain_id}: PAE {from_pae[chain_id]} residues, "
+            f"pLDDT {from_plddt[chain_id]} residues"
+            for chain_id in disagreeing
+        )
+        raise ValueError(
+            f"Chain length mismatch between the PAE and pLDDT documents.\n"
+            f"{detail}\n{_MISMATCH_REMEDY}"
+        )
+    return dict(sorted(from_pae.items()))
+
+
+# --- chain labelling (R021) -------------------------------------------------
+# "Chain A" identifies a column of a matrix; it does not identify a protein. The
+# PAE and pLDDT documents both carry a `name` per chain, and the prediction
+# endpoint carries the gene, the UniProt accession and the entry name, so every
+# label in the notebook can say *which protein* as well as which chain.
+#
+# Three forms rather than one, because the contexts differ by an order of
+# magnitude in the room they have: `token` for a bare identifier, `short` for an
+# axis label or a tick, `full` for a caption, a heading or printed output.
+
+_TRUNCATION_MARKERS: Tuple[str, ...] = ("-", ",", "(", "/", "+")
+"""Trailing characters that mean the service cut a protein name short.
+
+The homodimer fixture's `name` arrives as `'3-hydroxydecanoyl-'`, a prefix of
+"3-hydroxydecanoyl-[acyl-carrier-protein] dehydratase". The name is still worth
+showing -- it is the only human-readable identity in local-file mode -- so it is
+marked with an ellipsis rather than discarded."""
+
+
+def _tidy_name(name: Optional[str]) -> str:
+    """
+    Normalise a protein name, marking an obviously truncated one.
+
+    Args:
+        name: A `name` field from a PAE / pLDDT `chains` entry, or a
+              `uniprotDescription`. May be `None` or empty.
+
+    Returns:
+        The stripped name, with `'…'` appended when it ends mid-word; `''` when
+        there is nothing to show.
+
+    Example
+    -------
+    >>> _tidy_name('Small ubiquitin-related modifier 1')
+    'Small ubiquitin-related modifier 1'
+    >>> _tidy_name('3-hydroxydecanoyl-')
+    '3-hydroxydecanoyl-…'
+    >>> _tidy_name(None), _tidy_name('   ')
+    ('', '')
+    """
+    text = str(name or "").strip()
+    if not text:
+        return ""
+    if text.endswith(_TRUNCATION_MARKERS):
+        return text + "…"
+    return text
+
+
+@dataclass(frozen=True)
+class ChainLabel:
+    """
+    How one chain should be named on a figure, in a caption, or in printed output.
+
+    A homodimer gives both chains the same protein, so **every** form carries the
+    chain id: dropping it would make the two panels of a per-chain figure
+    indistinguishable. Every field is optional and every form degrades to
+    `'Chain A'` when nothing is known, which is what local-file mode and a
+    metadata-less document produce.
+
+    Attributes:
+        chain_id:     `label_asym_id`, e.g. `'A'`. The only required field.
+        protein_name: Full protein name, e.g. the PAE document's `name`.
+        gene:         Gene name, e.g. `'ISG20'`.
+        uniprot:      UniProt accession, e.g. `'Q96AZ6'`.
+        entry_name:   UniProt entry name, e.g. `'ISG20_HUMAN'`.
+
+    Example
+    -------
+    >>> isg20 = ChainLabel('A', 'Interferon-stimulated gene 20 kDa protein',
+    ...                    gene='ISG20', uniprot='Q96AZ6', entry_name='ISG20_HUMAN')
+    >>> isg20.token
+    'ISG20'
+    >>> isg20.short
+    'ISG20 (A)'
+    >>> isg20.full
+    'Chain A — Interferon-stimulated gene 20 kDa protein (Q96AZ6)'
+
+    With nothing known it degrades to the chain id, never to an empty string:
+
+    >>> ChainLabel('B').token, ChainLabel('B').short, ChainLabel('B').full
+    ('', 'Chain B', 'Chain B')
+
+    A homodimer's two chains stay distinguishable even though the protein is one:
+
+    >>> [ChainLabel(c, gene='fabA').short for c in 'AB']
+    ['fabA (A)', 'fabA (B)']
+    """
+
+    chain_id: str
+    protein_name: str = ""
+    gene: str = ""
+    uniprot: str = ""
+    entry_name: str = ""
+
+    @property
+    def token(self) -> str:
+        """
+        The shortest identifier for the *protein*, with no chain id: `'ISG20'`.
+
+        Gene first, then accession, then entry name -- a gene symbol is the form
+        a biologist reads fastest, and it is what fits a tick label. `''` when
+        none is known; the protein name is deliberately not used here, because a
+        41-character name is not a token.
+        """
+        return str(self.gene or self.uniprot or self.entry_name or "")
+
+    @property
+    def short(self) -> str:
+        """
+        Axis-label and tick form: `'ISG20 (A)'`, falling back to `'Chain A'`.
+
+        Short enough for an axis label, a tick and a legend entry, and still
+        unambiguous for a homodimer because the chain id is always present.
+        """
+        token = self.token
+        return f"{token} ({self.chain_id})" if token else f"Chain {self.chain_id}"
+
+    @property
+    def full(self) -> str:
+        """
+        Caption and printed-output form:
+        `'Chain A — Interferon-stimulated gene 20 kDa protein (Q96AZ6)'`.
+
+        Degrades one part at a time: without an accession the parenthesis is
+        dropped, without a name the accession takes its place, and with neither
+        it is just `'Chain A'`.
+        """
+        head = f"Chain {self.chain_id}"
+        name = self.protein_name
+        if name and self.uniprot:
+            return f"{head} — {name} ({self.uniprot})"
+        if name:
+            return f"{head} — {name}"
+        if self.token:
+            return f"{head} — {self.token}"
+        return head
+
+    def __str__(self) -> str:
+        """`short`, so a `ChainLabel` can be dropped into an f-string."""
+        return self.short
+
+
+@dataclass(frozen=True)
+class ChainIdentity:
+    """
+    The verified, cross-checked identity of every chain in one complex.
+
+    Produced by `verify_chain_identity`, which is the single place the structure,
+    the PAE document, the pLDDT document and (when online) the prediction
+    metadata are reconciled. Holding the agreed lengths and the labels together
+    is deliberate: a caller cannot get the labels without the check having passed.
+
+    Attributes:
+        lengths: The agreed `{chain_id: n_residues}`, sorted by chain id.
+        labels:  `{chain_id: ChainLabel}`, same keys as `lengths`.
+        notes:   Non-fatal observations -- a chain the metadata never described,
+                 a protein name the two documents disagree about. Worth printing;
+                 not worth refusing to run over, because none of them can
+                 misalign a slice.
+    """
+
+    lengths: Dict[str, int]
+    labels: Dict[str, ChainLabel]
+    notes: Tuple[str, ...] = ()
+
+    @property
+    def chain_ids(self) -> Tuple[str, ...]:
+        """Chain ids, sorted."""
+        return tuple(self.lengths)
+
+    def label(self, chain_id: str) -> ChainLabel:
+        """
+        One chain's `ChainLabel`.
+
+        Args:
+            chain_id: Chain id.
+
+        Returns:
+            Its label.
+
+        Raises:
+            KeyError: If the chain is not part of this complex.
+        """
+        try:
+            return self.labels[chain_id]
+        except KeyError:
+            raise KeyError(
+                f"Chain {chain_id!r} is not part of this complex; "
+                f"it has chains {', '.join(self.chain_ids) or '(none)'}."
+            ) from None
+
+    def short(self, chain_id: str) -> str:
+        """`ChainLabel.short` for one chain: `'ISG20 (A)'`."""
+        return self.label(chain_id).short
+
+    def full(self, chain_id: str) -> str:
+        """`ChainLabel.full` for one chain."""
+        return self.label(chain_id).full
+
+    def legend(self) -> str:
+        """
+        One line per chain, mapping the id used on the axes to the protein.
+
+        The companion to the compact forms: figures and tabular output stay
+        narrow by using `short`, and this says once, in full, what each id means.
+
+        Example
+        -------
+        >>> identity = ChainIdentity(
+        ...     {'A': 181, 'B': 101},
+        ...     {'A': ChainLabel('A', 'Interferon-stimulated gene 20 kDa protein',
+        ...                      gene='ISG20', uniprot='Q96AZ6'),
+        ...      'B': ChainLabel('B', 'Small ubiquitin-related modifier 1',
+        ...                      gene='Sumo1', uniprot='P63166')})
+        >>> print(identity.legend())
+        Chain A — Interferon-stimulated gene 20 kDa protein (Q96AZ6), 181 residues, labelled "ISG20 (A)"
+        Chain B — Small ubiquitin-related modifier 1 (P63166), 101 residues, labelled "Sumo1 (B)"
+        """
+        return "\n".join(
+            f"{self.labels[chain_id].full}, {self.lengths[chain_id]} residues, "
+            f'labelled "{self.labels[chain_id].short}"'
+            for chain_id in self.chain_ids
+        )
+
+
+def verify_chain_identity(
+    chains: Mapping[str, ChainCoords],
+    pae: PAEMatrix,
+    plddt: Optional[PLDDTScores] = None,
+    prediction: Optional[AFDBPrediction] = None,
+) -> ChainIdentity:
+    """
+    Reconcile the three chain-describing sources, then build a label per chain.
+
+    The structure, the PAE document and the pLDDT document each carry their own
+    chain list, and every PAE quadrant and every per-chain pLDDT slice is cut on
+    the assumption that all three agree. `CLAUDE.md`'s edge-case table warns that
+    asymmetric chain labels can misalign that slicing; this makes the agreement a
+    checked precondition instead (R021). All three edges of the triangle are
+    tested -- structure/PAE, structure/pLDDT and PAE/pLDDT -- so the check does
+    not depend on which arguments a caller happened to pass.
+
+    **Chain ids are never mapped positionally.** A structure labelled `A`/`C`
+    against a PAE document labelled `A`/`B` raises. See `_MAPPING_REFUSAL` for
+    why: no source here carries a trustworthy order to map on, so a positional
+    pairing would be a guess whose failure mode is a plausible wrong number.
+
+    Args:
+        chains:     `{chain_id: ChainCoords}` from `parse_structure`.
+        pae:        The parsed PAE document.
+        plddt:      The parsed pLDDT document, when there is one.
+        prediction: The fetched AFDB metadata, when online. Supplies the gene,
+                    the UniProt accession and the entry name; without it the
+                    labels fall back to the documents' own `name` field, and
+                    then to the bare chain id.
+
+    Returns:
+        A `ChainIdentity` carrying the agreed lengths, one `ChainLabel` per chain
+        and any non-fatal notes.
+
+    Raises:
+        ValueError: If the chain sets or the chain lengths disagree between any
+            two of the three sources.
+
+    Example
+    -------
+    >>> spans = (ChainSpan('A', 1, 2, name='Alpha protein'),
+    ...          ChainSpan('B', 1, 1, name='Beta protein'))
+    >>> pae = PAEMatrix(np.zeros((3, 3), dtype=np.float32), 30.0, spans)
+    >>> chains = {'A': ChainCoords('A', np.zeros((2, 3), dtype=np.float32),
+    ...                            np.array([1, 2]), np.array(['ALA', 'ALA']),
+    ...                            np.zeros(2, dtype=np.float32)),
+    ...           'B': ChainCoords('B', np.zeros((1, 3), dtype=np.float32),
+    ...                            np.array([1]), np.array(['GLY']),
+    ...                            np.zeros(1, dtype=np.float32))}
+    >>> identity = verify_chain_identity(chains, pae)
+    >>> identity.lengths
+    {'A': 2, 'B': 1}
+    >>> identity.short('A'), identity.full('A')
+    ('Chain A', 'Chain A — Alpha protein')
+
+    With metadata, the gene becomes the short form:
+
+    >>> pred = AFDBPrediction('AF-1', ({'chainId': 'A', 'gene': 'alp',
+    ...                                 'uniprotAccession': 'P1'},
+    ...                                {'chainId': 'B', 'gene': 'bet',
+    ...                                 'uniprotAccession': 'P2'}))
+    >>> identity = verify_chain_identity(chains, pae, prediction=pred)
+    >>> identity.short('A'), identity.short('B')
+    ('alp (A)', 'bet (B)')
+
+    A metadata chain the structure does not have is a note, not a failure:
+
+    >>> partial = AFDBPrediction('AF-2', ({'chainId': 'A', 'gene': 'alp'},))
+    >>> verify_chain_identity(chains, pae, prediction=partial).notes
+    ('Chain B: the AFDB metadata describes no such chain (it described: A); labelling it from the PAE/pLDDT documents alone.',)
+    """
+    lengths = verify_chain_lengths(chains, pae)
+    if plddt is not None:
+        verify_chain_lengths(chains, plddt)
+        verify_document_agreement(pae, plddt)
+
+    doc_names: Dict[str, Dict[str, str]] = {}
+    for source, document in (("PAE", pae), ("pLDDT", plddt)):
+        if document is None:
+            continue
+        for span in document.spans:
+            doc_names.setdefault(span.chain_id, {})[source] = _tidy_name(span.name)
+
+    notes: List[str] = []
+    labels: Dict[str, ChainLabel] = {}
+    for chain_id in lengths:
+        per_source = doc_names.get(chain_id, {})
+        distinct = {name for name in per_source.values() if name}
+        if len(distinct) > 1:
+            notes.append(
+                f"Chain {chain_id}: the PAE and pLDDT documents give different "
+                f"protein names ({'; '.join(sorted(distinct))}); using the PAE "
+                f"document's. Labels only -- no slice depends on this."
+            )
+        name = per_source.get("PAE") or per_source.get("pLDDT") or ""
+
+        gene = uniprot = entry_name = ""
+        if prediction is not None:
+            if prediction.describes_chain(chain_id):
+                gene = str(prediction.chain_field(
+                    chain_id, "geneNames", "gene", default="") or "")
+                uniprot = str(prediction.chain_field(
+                    chain_id, "uniprotAccession", default="") or "")
+                entry_name = str(prediction.chain_field(
+                    chain_id, "uniprotId", default="") or "")
+                name = _tidy_name(prediction.chain_field(
+                    chain_id, "proteinFullName", "uniprotDescription",
+                    default="")) or name
+            else:
+                notes.append(
+                    f"Chain {chain_id}: the AFDB metadata describes no such chain "
+                    f"(it described: {', '.join(prediction.chain_ids) or '(none)'}); "
+                    f"labelling it from the PAE/pLDDT documents alone."
+                )
+
+        labels[chain_id] = ChainLabel(
+            chain_id=chain_id,
+            protein_name=name,
+            gene=gene,
+            uniprot=uniprot,
+            entry_name=entry_name,
+        )
+
+    if prediction is not None:
+        extra = [c for c in prediction.chain_ids if c not in lengths]
+        if extra:
+            notes.append(
+                f"The AFDB metadata describes chains absent from the structure: "
+                f"{', '.join(extra)}. They are not analysed."
+            )
+
+    return ChainIdentity(lengths=lengths, labels=labels, notes=tuple(notes))
 
 
 # ---------------------------------------------------------------------------
@@ -3895,9 +4380,17 @@ def resolve_pae_cmap(cmap: Optional[str | Colormap] = None) -> Colormap:
     return matplotlib.colormaps[PAE_CMAP_CHOICES.get(requested, requested)]
 
 
-def _chain_label(chain_id: str, label: Optional[str] = None) -> str:
-    """`label` if given, else `'Chain <id>'`. R021 supplies real protein names."""
-    return label if label else f"Chain {chain_id}"
+def _chain_label(chain_id: str, label: "Optional[str | ChainLabel]" = None) -> str:
+    """
+    `label` if given, else `'Chain <id>'`.
+
+    Accepts a `ChainLabel` as well as a plain string, so a caller can pass the
+    record straight through and get its `short` form (R021); `ChainLabel.__str__`
+    is `short` for exactly this reason.
+    """
+    if label is None or label == "":
+        return f"Chain {chain_id}"
+    return str(label)
 
 
 def plddt_band_colour(value: float) -> str:
@@ -3997,8 +4490,8 @@ def _check_same_pair(pair: ChainPairPAE, contacts: InterfaceContacts) -> None:
 
 def plot_interface_contact_map(
     contacts: InterfaceContacts,
-    label_x: Optional[str] = None,
-    label_y: Optional[str] = None,
+    label_x: "Optional[str | ChainLabel]" = None,
+    label_y: "Optional[str | ChainLabel]" = None,
     cmap: str | Colormap = DIST_CMAP,
     figsize: Tuple[float, float] = (14.0, 6.0),
 ) -> Figure:
@@ -4068,6 +4561,7 @@ def plot_pae_matrix(
     chain_x: Optional[str] = None,
     chain_y: Optional[str] = None,
     accession: str = "",
+    labels: "Optional[Mapping[str, str | ChainLabel]]" = None,
     cmap: Optional[str | Colormap] = None,
     figsize: Tuple[float, float] = (10.0, 9.0),
 ) -> Figure:
@@ -4086,6 +4580,10 @@ def plot_pae_matrix(
                    chain in matrix layout order.
         chain_y:   The second; defaults to the second chain in layout order.
         accession: Shown in the title when given.
+        labels:    `{chain_id: display name}` for **every** chain in the matrix,
+                   not just the pair, because the axis names every block. Pass
+                   `ChainIdentity.labels` to get real protein names; omit it and
+                   each chain is called `'Chain <id>'` (R021).
         cmap:      Colormap override; `None` uses `PAE_CMAP` (the R051 seam).
         figsize:   Figure size in inches. `(10, 9)` at `figure.dpi = 150` is
                    1500x1350 px, which overflows the notebook output area --
@@ -4114,6 +4612,9 @@ def plot_pae_matrix(
     if chain_x == chain_y:
         raise ValueError(f"Need two distinct chains, got {chain_x!r} twice.")
 
+    label_of = {} if labels is None else dict(labels)
+    name = {cid: _chain_label(cid, label_of.get(cid)) for cid in ids}
+
     fig = Figure(figsize=figsize)
     ax = fig.subplots()
 
@@ -4134,23 +4635,25 @@ def plot_pae_matrix(
         return (span_slice.start + span_slice.stop) / 2.0
 
     cx, cy = _centre(chain_x), _centre(chain_y)
-    for col, row, text in ((cx, cx, f'Intra {chain_x}'),
-                           (cy, cx, f'Inter\n{chain_x}→{chain_y}'),
-                           (cx, cy, f'Inter\n{chain_y}→{chain_x}'),
-                           (cy, cy, f'Intra {chain_y}')):
+    name_x, name_y = name[chain_x], name[chain_y]
+    for col, row, text in ((cx, cx, f'Intra\n{name_x}'),
+                           (cy, cx, f'Inter\n{name_x}→{name_y}'),
+                           (cx, cy, f'Inter\n{name_y}→{name_x}'),
+                           (cy, cy, f'Intra\n{name_y}')):
         ax.text(col, row, text, ha='center', va='center',
                 color='white', fontsize=11, fontweight='bold', alpha=0.8)
 
     if len(ids) == 2:
         first, second = ids
-        ax.set_xlabel(f'Residue index (chain {first}: 0 to n{first}-1, '
-                      f'chain {second}: n{first} to end)')
+        n_first = pae.chain_length(first)
+        ax.set_xlabel(f'Residue index ({name[first]}: 0 to {n_first - 1}, '
+                      f'{name[second]}: {n_first} to end)')
     else:
-        ax.set_xlabel('Residue index')
+        ax.set_xlabel('Residue index (' + ', then '.join(name[c] for c in ids) + ')')
     ax.set_ylabel('Residue index')
     head = f'Full PAE Matrix — {accession}' if accession else 'Full PAE Matrix'
     ax.set_title(f'{head}\n'
-                 f'(dashed line = chain boundary between {chain_x} and {chain_y})')
+                 f'(dashed line = chain boundary between {name_x} and {name_y})')
 
     fig.tight_layout()
     return fig
@@ -4162,8 +4665,8 @@ def plot_pae_score_masks(
     max_pae: float,
     pae_cutoff: float = PAE_CUTOFF,
     lis_cutoff: float = LIS_CUTOFF,
-    label_x: Optional[str] = None,
-    label_y: Optional[str] = None,
+    label_x: "Optional[str | ChainLabel]" = None,
+    label_y: "Optional[str | ChainLabel]" = None,
     cmap: Optional[str | Colormap] = None,
     figsize: Tuple[float, float] = (14.0, 12.0),
 ) -> Figure:
@@ -4235,7 +4738,7 @@ def plot_pae_score_masks(
 
     # Preserved defect (R052): one colour bar on the last axis only.
     fig.colorbar(im, ax=axes[-1], label='PAE (Å)')
-    fig.suptitle(f'{contacts.chain_x}→{contacts.chain_y} Inter-chain PAE Block: '
+    fig.suptitle(f'{name_x} → {name_y} Inter-chain PAE Block: '
                  'cells used by each score\n(grey = not used by this score)',
                  fontsize=12, y=1.01)
     fig.tight_layout()
@@ -4248,8 +4751,8 @@ def plot_residue_score_profiles(
     contacts: InterfaceContacts,
     plddt_x: np.ndarray,
     plddt_y: np.ndarray,
-    label_x: Optional[str] = None,
-    label_y: Optional[str] = None,
+    label_x: "Optional[str | ChainLabel]" = None,
+    label_y: "Optional[str | ChainLabel]" = None,
     figsize: Tuple[float, float] = (14.0, 10.0),
 ) -> Figure:
     """
@@ -4350,8 +4853,8 @@ def plot_plddt_distribution(
     contacts: InterfaceContacts,
     plddt_x: np.ndarray,
     plddt_y: np.ndarray,
-    label_x: Optional[str] = None,
-    label_y: Optional[str] = None,
+    label_x: "Optional[str | ChainLabel]" = None,
+    label_y: "Optional[str | ChainLabel]" = None,
     figsize: Tuple[float, float] = (14.0, 5.0),
 ) -> Figure:
     """
@@ -4386,10 +4889,11 @@ def plot_plddt_distribution(
             f"({plddt_x.shape[0]}, {plddt_y.shape[0]})."
         )
 
-    # Short labels here: these two strings read as sequence landmarks
-    # ("A then B"), not as panel headings, so they take the bare chain id.
-    name_x = label_x if label_x else contacts.chain_x
-    name_y = label_y if label_y else contacts.chain_y
+    # These two strings read as sequence landmarks ("A, then B") rather than as
+    # panel headings, so they want the compact form; `ChainLabel.short` already
+    # is that form, and the bare chain id is its fallback.
+    name_x = _chain_label(contacts.chain_x, label_x)
+    name_y = _chain_label(contacts.chain_y, label_y)
 
     if_plddt = np.concatenate([plddt_x[contacts.mask_x], plddt_y[contacts.mask_y]])
     ni_plddt = np.concatenate([plddt_x[~contacts.mask_x], plddt_y[~contacts.mask_y]])
@@ -4421,9 +4925,9 @@ def plot_plddt_distribution(
     ax2.fill_between(full_x, 0, 100, where=full_if, alpha=0.18, color=COLOUR_IF,
                      label='Interface residues')
     ax2.axvline(nx - 0.5, color='black', linewidth=1.5, linestyle='--',
-                label=f'Chain {name_x}/{name_y} boundary')
+                label=f'{name_x} | {name_y} boundary')
     ax2.axhline(70, color='grey', linestyle=':', linewidth=1)
-    ax2.set_xlabel(f'Residue index ({name_x} then {name_y})')
+    ax2.set_xlabel(f'Residue index — {name_x}, then {name_y}')
     ax2.set_ylabel('pLDDT')
     ax2.set_title('Per-residue pLDDT profile (AlphaFold colour scheme)')
 
@@ -4656,19 +5160,69 @@ here so R073 can draw it, and so the category names can be rewritten in terms a
 reader can act on rather than as a colour key."""
 
 MVS_VIEW_LABELS: Dict[str, str] = {
-    "chain_overview": "View 1: Chain Overview (teal=A, coral=B, amber=interface)",
-    "plddt": ("View 2: pLDDT Mapping "
+    "chain_overview": ("View 1: Chain Overview "
+                       "(teal = {x}, coral = {y}, amber = interface)"),
+    "plddt": ("View 2: pLDDT Mapping of {x} and {y} "
               "(dark blue>90, light blue 70–90, yellow 50–70, orange<50)"),
-    "interface_value": ("View 3: Interface ipSAE d0res score "
+    "interface_value": ("View 3: Interface ipSAE d0res score, {x} and {y} "
                         "(red=low, yellow=mid, green=high)"),
-    "disagreement": ("View 4: Disagreement (green=PAE+contact, "
+    "disagreement": ("View 4: Disagreement on {x} (green=PAE+contact, "
                      "blue=PAE confident/no contact, red=contact/low PAE)"),
 }
-"""The caption `show_mol_view` draws above each view, verbatim from the notebook.
+"""The caption `show_mol_view` draws above each view.
 
-Every one of these is a colour key rather than an explanation, and the chain
-letters in View 1's are hard-coded. R070 replaces them with real supporting
-text; this dict is where that lands."""
+Templates, not finished strings: `{x}` and `{y}` are filled by
+`format_view_label` with the two chains' display names, so a caption says which
+*proteins* are teal and coral rather than the hard-coded `'A'` and `'B'` the
+notebook used to spell out (R021). View 4's template names only `{x}` because
+the builder colours only `contacts.chain_x` -- a defect R073 owns, and one the
+caption should not paper over.
+
+Every one of these is still a colour key rather than an explanation. R070
+replaces them with real supporting text; this dict is where that lands."""
+
+
+def format_view_label(
+    key: str,
+    label_x: "str | ChainLabel",
+    label_y: "str | ChainLabel",
+    labels: Mapping[str, str] = MVS_VIEW_LABELS,
+) -> str:
+    """
+    Fill one `MVS_VIEW_LABELS` template with the chain pair's display names.
+
+    Args:
+        key:     A key of `labels`, e.g. `'chain_overview'`.
+        label_x: Display name for the first chain of the ordered pair. A
+                 `ChainLabel` renders as its `short` form.
+        label_y: Display name for the second.
+        labels:  Template table; defaults to `MVS_VIEW_LABELS`.
+
+    Returns:
+        The caption, ready for `show_mol_view`.
+
+    Raises:
+        KeyError: If `key` is not in `labels`.
+
+    Example
+    -------
+    >>> format_view_label('chain_overview',
+    ...                   ChainLabel('A', gene='ISG20'),
+    ...                   ChainLabel('B', gene='Sumo1'))
+    'View 1: Chain Overview (teal = ISG20 (A), coral = Sumo1 (B), amber = interface)'
+
+    Templates that name only one chain ignore the other:
+
+    >>> format_view_label('disagreement', 'ISG20 (A)', 'Sumo1 (B)')
+    'View 4: Disagreement on ISG20 (A) (green=PAE+contact, blue=PAE confident/no contact, red=contact/low PAE)'
+    """
+    try:
+        template = labels[key]
+    except KeyError:
+        raise KeyError(
+            f"No view label for {key!r}; known views: {', '.join(sorted(labels))}."
+        ) from None
+    return template.format(x=str(label_x), y=str(label_y))
 
 MOLVIEWSPEC_MISSING_MESSAGE: str = (
     "molviewspec is not installed, so the 3D views are unavailable. "

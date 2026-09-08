@@ -705,7 +705,7 @@ it, so a future per-chain document scheme fails loudly instead of mis-slicing si
 **This also strengthens the case for R008's directional diff:** a value that changes between
 runs of an unchanged notebook is the hardest class of bug to notice by eye.
 
-### `[ ] R021 — Chain identity and labelling`
+### `[x] R021 — Chain identity and labelling` — DONE 2026-09-08
 
 **What.** Resolve structure chain IDs against the PAE `chains` field, and use real protein
 names in labels instead of "Chain A" / "Chain B".
@@ -813,6 +813,50 @@ because the live service sends `gene` and `latestVersion`, not the `geneNames` a
 not describe prints a note under its own header and downgrades the assembly line; a metadata
 chain absent from the structure is flagged; `entry_for_chain` on an unknown chain raises with
 the list of chains that were described.
+
+
+**R021 outcome, 2026-09-08.**
+
+**Chain-id mismatch now fails rather than guessing, and says why.** `verify_chain_identity()`
+reconciles all three sources (structure, PAE, pLDDT) in one call, and
+`verify_document_agreement()` closes the PAE-vs-pLDDT edge directly instead of inferring it
+through the structure. The refusal to map positionally is argued in the error text itself:
+neither source carries a trustworthy order (the documents' `chains` arrays are re-sorted here
+precisely because arrival order is not authoritative, and R020 measured the prediction
+endpoint's non-determinism), and chain length is no tie-breaker because a homodimer's chains
+are equal by definition. A positional guess would mis-slice every quadrant into
+plausible-looking wrong scores rather than an error. Metadata-side gaps stay non-fatal notes,
+since they cannot misalign a slice.
+
+**Real protein names throughout.** Heterodimer axis labels went from `Chain A` / `Chain B` to
+`ISG20 (A)` / `Sumo1 (B)`, with the full form
+`Chain A — Interferon-stimulated gene 20 kDa protein (Q96AZ6)` where space allows. Three label
+forms (`token`, `short`, `full`) let each context pick what fits. The chain id is retained in
+every form, so a homodimer's two chains stay distinguishable. Fallback ladder verified across
+eight cases down to a bare `Chain A` when nothing is known; the homodimer's service-truncated
+`'3-hydroxydecanoyl-'` is marked with an ellipsis rather than discarded.
+
+Scores unchanged on both fixtures; 191 doctests pass.
+
+### `[ ] R025 — Make USE_LOCAL_FILE mode honest about missing PAE/pLDDT`
+
+**Found during R021, pre-existing, not caused by it.** In `USE_LOCAL_FILE` mode the upload
+cells print "PAE file not uploaded — PAE-dependent analyses will be skipped", but nothing
+skips them: `pae_raw` / `plddt_raw` stay `None` and the parse cell raises `TypeError` before
+any verification runs.
+
+**Why it matters more than it looks.** `threshold-reference.md` §1 rests on the local-file path
+being the case where the traffic light does real work: for an AFDB accession the model has
+already passed the 0.6 filter, so red essentially never appears. The one route that exercises
+the full range is the one that crashes.
+
+**Options.** Either genuinely skip the PAE-dependent sections with a clear banner listing what
+was skipped, or fail immediately at upload time with a message saying PAE and pLDDT are
+required. Do not keep advertising a skip that does not happen.
+
+**Done when.** Local-file mode with no PAE/pLDDT either completes with a clear statement of
+what was skipped, or fails at the point of upload with an actionable message. Verified by
+running it both ways.
 
 ## W3 — Section 2, Interface Detection
 
@@ -1149,7 +1193,7 @@ done here, or point them at this file.
 
 ## Milestones and execution order
 
-45 tasks in 8 milestones. Execution model, agreed with the user 2026-09-07: each task goes to
+46 tasks in 8 milestones. Execution model, agreed with the user 2026-09-07: each task goes to
 a **fresh agent**, strictly **sequential**, and each result is verified against source and by
 execution before the next is dispatched. At every milestone boundary, work **stops** for user
 review.
@@ -1158,7 +1202,7 @@ review.
 |---|-----------|-------|---|--------|
 | M1 | Ground truth | R001, R002, R002b, R009 | 4 | R002b added 2026-09-08 |
 | M2 | Module extracted; notebook shrunk 54% | R010, R010b, R011-R016 | 8 | **COMPLETE** 2026-09-08 |
-| M3 | Heterodimer support | R020-R024 | 5 | R020 done |
+| M3 | Heterodimer support | R020-R025 | 6 | R020, R021 done; R025 added |
 | M4 | Scoring correctness + Section 4 | R003-R008, R060-R062 | 9 | R003, R005, R006, R007 landed early in R012 |
 | M5 | PAE visuals | R050-R052 | 3 | |
 | M6 | 3D views | R070-R075, R030 | 7 | |
