@@ -463,7 +463,7 @@ layout, and rewrite notebook cell 1 as the D9 clone-and-path bootstrap.
 **Supporting notes.** Per D4, each function takes an explicit `(block_XY, block_YX, nX, nY)`
 or a small `ChainPair` object rather than assuming "A and B".
 
-### `[ ] R013 — Move plotting into the module`
+### `[x] R013 — Move plotting into the module` — DONE 2026-09-08
 
 **Covers cells 13, 15, 16, 20, 22, 27.** Each becomes a `plot_*` function returning `fig`,
 so the notebook cell is one call plus a title. Palette handling from R051 lives here.
@@ -492,13 +492,75 @@ Per D10, `interface.py` itself stays on disk until R095.
 - `interface.py`'s dataclasses (`ChainCoords`, `InterfaceResult`) are worth keeping; they are
   the natural carrier for the explicit chain-pair API in D4.
 
-### `[ ] R016 — Slim the notebook import cell`
+### `[ ] R016 — Switch the notebook onto the module and delete the inline code`
 
-**Covers cell 2.** Keep the plotting style block and the colour constants; move everything
-else behind the module import. Drop the blanket `warnings.filterwarnings('ignore')`, which
-currently hides the deprecation warnings we need to see (see R075).
+**This is the task that delivers the decluttering.** R011-R014 build module functions
+*alongside* the notebook's own copies, so that the notebook never breaks mid-refactor. Until
+R016 runs, every piece of logic exists twice and the notebook still executes its own copy.
+
+**Plan defect, found by the user 2026-09-08 and corrected here.** R016 previously read "Slim
+the notebook import cell. Covers cell 2." That covered the imports only. No task in the plan
+owned removing the inline implementations, which is the user's original request ("Offload
+every utils and function into a module... focus on decluttering"). Rescoped below.
+
+**Measured at the time of writing (1-indexed cells).** 1058 code lines total: 268 already
+duplicated by the module, 361 more once R013/R014 land, leaving ~429 lines of genuine
+orchestration and narrative.
+
+| Cell | Lines | Inline logic | Replaced by |
+|------|-------|--------------|-------------|
+| 3 | 26 | imports, plot style, colour constants | keep the style block and colours; drop the rest, and drop the blanket `warnings.filterwarnings('ignore')` which currently hides the deprecations R075 needs to see |
+| 7 | 21 | AFDB metadata fetch | `fetch_afdb_metadata`, `download_*` |
+| 9 | 86 | mmCIF parsing, CB/CA extraction | `parse_mmcif_atoms`, `parse_structure` |
+| 10 | 37 | PAE and pLDDT parsing, quadrant slicing | `parse_pae`, `parse_plddt`, `ordered_pair` |
+| 13 | 21 | CB-CB distance matrix, interface masks | `detect_interface` |
+| 14, 16, 17, 21, 23, 28 | 210 | matplotlib figures | `plot_*` from R013 |
+| 19 | 103 | all seven scoring functions | `compute_*` from R012 |
+| 25 | 143 | MolViewSpec view builders | R014 builders |
+
+**Blast radius — why this is one coherent pass, not a per-cell trickle.** Cell 19 defines the
+`compute_*` functions and cell 20 calls them, building the `scores` dict and the `res_*`
+result dicts that cells 21, 27, 28 and 29 then consume by key (`res_ipsae['per_res_AB_d0res']`
+and similar). The module returns dataclasses, not dicts. So switching the producer forces
+updating every consumer in the same task. Splitting that across tasks would leave the notebook
+broken in between, violating the Invariant.
+
+**Equivalence criterion.** Capture every printed number and every score from a full Run All
+*before* the switch, on both fixtures. Repeat *after*. Any numerical difference is a bug, not
+drift, because R011 and R012 both verified bit-identical behaviour against the inline code at
+the time they landed. Figures are compared visually; numbers must match exactly.
+
+**Sequencing.** R016 runs last in M2, after R013, R014 and R015, so the notebook is rewritten
+once against a complete module rather than twice against a partial one.
 
 ---
+
+
+**R013 verification, 2026-09-08.** Deliberately a behaviour-preserving move, not a redesign:
+R050/R051/R052 own the visual changes, and mixing a move with a redesign would leave no way to
+tell an intended change from a regression. Numerical fixes could be landed early in R012
+because `ipsae.py` is an objective oracle; visual work has none.
+
+Result: **byte-identical PNGs**. The full PAE heatmap and the contact map render to the same
+SHA-256 as the notebook's original inline code on both fixtures, zero differing pixels, and the
+score-mask panel and pLDDT figure match too. Independently re-verified by the orchestrator on
+the heterodimer. All six figures render on both fixtures with correct per-chain axes (181 and
+101 residues), so nothing assumed a square matrix.
+
+**Seams built for later milestones.**
+- `PAE_CMAP` + `resolve_pae_cmap()` read the default at call time, so R051 flips one constant
+  rather than rewriting six functions. Default stays `RdBu_r` today.
+- `apply_plot_style()` is explicit and never runs at import, so importing the module cannot
+  mutate global matplotlib state. Verified: `figure.dpi` is unchanged by import.
+- Figures are built from `matplotlib.figure.Figure`, not `plt.subplots`, so a returned figure
+  is not double-displayed by the inline backend and nothing leaks into pyplot's registry.
+  Verified: 0 open figures after a module call.
+
+**Two figures deliberately NOT byte-identical, both correct.** The per-residue profiles now
+carry the R003/R007 directional fixes, so their data genuinely differs. The agreement matrix
+normalises by `THRESHOLDS[...].green` instead of the notebook's stale inline dict and labels
+the score `ipTM_d0chn` per R004 — preserving the old numbers there would have meant preserving
+thresholds R002/R009 corrected.
 
 ## W2 — Heterodimer support
 
@@ -956,7 +1018,7 @@ review.
 | # | Milestone | Tasks | n | Status |
 |---|-----------|-------|---|--------|
 | M1 | Ground truth | R001, R002, R002b, R009 | 4 | R002b added 2026-09-08 |
-| M2 | Module extracted, behaviour preserved | R010, R010b, R011-R016 | 8 | R010, R010b, R011, R012 done |
+| M2 | Module extracted; **R016 is where the notebook actually shrinks** | R010, R010b, R011-R016 | 8 | R010, R010b, R011, R012, R013 done |
 | M3 | Heterodimer support | R020-R024 | 5 | |
 | M4 | Scoring correctness + Section 4 | R003-R008, R060-R062 | 9 | R003, R005, R006, R007 landed early in R012 |
 | M5 | PAE visuals | R050-R052 | 3 | |

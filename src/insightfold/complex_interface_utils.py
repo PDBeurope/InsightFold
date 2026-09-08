@@ -68,7 +68,9 @@ Dependency policy
 -----------------
 Allowed at module top level: `numpy`, `requests`, `matplotlib`, `seaborn`
 (imports are added by the task that first needs them, so this file stays cheap
-to import). `molviewspec` is imported **lazily**, inside the function that needs
+to import). Importing this module never mutates global matplotlib state: the
+notebook's style block is applied only by an explicit `apply_plot_style()` call.
+`molviewspec` is imported **lazily**, inside the function that needs
 it, so the notebook degrades gracefully when it is not installed and so a plain
 `import complex_interface_utils` never pays for it.
 
@@ -84,9 +86,14 @@ This file is being filled in over several tasks; the sections still empty carry
 a note naming the task that populates them. Implemented so far: AFDB access,
 structure parsing, PAE / pLDDT parsing and interface detection (R011), the shared
 scoring primitives (the two `d0` helpers and `ptm_func`), the seven score
-functions (R012, landing R003 / R005 / R006 / R007), and the threshold table with
-its traffic light and the AFDB joint criterion. Still to come: the plots (R013)
-and the MolViewSpec views (R014).
+functions (R012, landing R003 / R005 / R006 / R007), the threshold table with
+its traffic light and the AFDB joint criterion, and the six matplotlib figures
+(R013). Still to come: the MolViewSpec views (R014).
+
+The plotting section is a behaviour-preserving move of the notebook's inline
+figures, not a redesign: the sizing (R050), the palette (R051) and the
+score-mask panel (R052) are corrected later, and `PAE_CMAP` is the seam R051
+changes.
 
 The notebook still carries its own inline copies of the scoring code and still
 runs off them; R016 switches the call sites over.
@@ -97,8 +104,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple
 
+import matplotlib
+import matplotlib.patches as mpatches
+import matplotlib.pyplot as plt
 import numpy as np
 import requests
+import seaborn as sns
+from matplotlib.colors import Colormap
+from matplotlib.figure import Figure
 
 __all__ = [
     # constants
@@ -171,6 +184,35 @@ __all__ = [
     "AFDB_RELEASE_SCALE",
     "AFDBHighConfidence",
     "afdb_high_confidence",
+    # plotting: style and palette
+    "NOTEBOOK_RC_PARAMS",
+    "apply_plot_style",
+    "PAE_CMAP",
+    "PAE_CMAP_CHOICES",
+    "DIST_CMAP",
+    "AGREEMENT_CMAP",
+    "resolve_pae_cmap",
+    # plotting: colours
+    "COLOUR_A",
+    "COLOUR_B",
+    "COLOUR_IF",
+    "COLOUR_NON_IF",
+    "COLOUR_NON_IF_HIST",
+    "CHAIN_COLOURS",
+    "SCORE_PROFILE_COLOURS",
+    "PLDDT_BANDS",
+    "PLDDT_BAND_COLOURS",
+    "plddt_band_colour",
+    "SCORE_DISPLAY_NAMES",
+    "AGREEMENT_SCORES",
+    # plotting: figures
+    "score_masks",
+    "plot_interface_contact_map",
+    "plot_pae_matrix",
+    "plot_pae_score_masks",
+    "plot_residue_score_profiles",
+    "plot_plddt_distribution",
+    "plot_score_agreement",
 ]
 
 
@@ -3295,13 +3337,848 @@ def afdb_high_confidence(ipsae_d0res: float, pdockq2: float) -> AFDBHighConfiden
 
 
 # ---------------------------------------------------------------------------
-# Plotting  --  filled by R013
+# Plotting
 # ---------------------------------------------------------------------------
-# One `plot_*` function per figure, each returning a `fig`, so a notebook cell is
-# one call plus a title. Adds the `matplotlib` / `seaborn` top-level imports and
-# the `PAE_CMAP` palette setting (R051): default is a sequential green with dark
-# = low PAE = confident, plus a colourblind-safe alternative and `RdBu_r` for
-# continuity.
+# One `plot_*` function per figure, each returning a `matplotlib` `Figure` and
+# never calling `plt.show()`, so a notebook cell is one call plus a title and the
+# same figure can be saved head-lessly by a test.
+#
+# Three deliberate properties of this section:
+#
+# 1. **Figures are built from `matplotlib.figure.Figure`, not `plt.subplots`.**
+#    A pyplot figure is registered in pyplot's global list and the inline backend
+#    then draws it at the end of the cell *in addition to* the returned object
+#    being rendered, which shows every figure twice. A bare `Figure` is owned by
+#    the caller, renders once, and never leaks between cells.
+# 2. **Nothing here mutates global state at import time.** The notebook's style
+#    block lives in `apply_plot_style()` and is applied only when called, so
+#    `import complex_interface_utils` leaves `plt.rcParams` untouched.
+# 3. **Chain-pair-generic (D4).** No `'A'` / `'B'` literals, no assumption that
+#    `nx == ny`. Every label is derived from the chain ids on the dataclass being
+#    plotted, so the heterodimer fixture renders as correctly as the homodimer.
+#
+# Palette seam (R051)
+# -------------------
+# `PAE_CMAP` is the single module-level name every PAE figure resolves through,
+# at call time rather than at definition time, and every such function also takes
+# a `cmap=` override. R051 -- "green default palette with a switchable
+# alternative" -- is therefore a change of *this default*, not a rewrite of the
+# functions below. The default is `'RdBu_r'` today only because that is what the
+# notebook draws; R051 flips it to a sequential green with dark = low PAE =
+# confident, and `PAE_CMAP_CHOICES` is where the candidates are named.
+#
+# What this section deliberately does NOT do
+# ------------------------------------------
+# R013 is a behaviour-preserving move. The sizing (R050), the palette (R051) and
+# the score-mask panel's aspect ratio and shared colour bar (R052) are all known
+# defects, and all three are left exactly as the notebook draws them today: the
+# scoring code could be corrected early because `ipsae.py` is an objective
+# oracle, but a figure has no oracle, so a visual change landed here would be
+# indistinguishable from a regression. Specifically preserved on purpose:
+# `aspect='auto'` everywhere, `figsize=(10, 9)` for the full PAE matrix, and
+# `fig.colorbar(im, ax=axes[-1])` in the 2x2 panel, which steals width from the
+# fourth axis alone and is why that panel renders narrower than the other three.
+
+
+NOTEBOOK_RC_PARAMS: Dict[str, Any] = {
+    "font.size": 12,
+    "axes.labelsize": 12,
+    "axes.titlesize": 13,
+    "xtick.labelsize": 10,
+    "ytick.labelsize": 10,
+    "figure.dpi": 150,
+}
+"""The notebook's own `rcParams` block, moved here verbatim so the notebook does
+not have to carry it (R016). Applied by `apply_plot_style()`, never on import."""
+
+
+# -- colours ----------------------------------------------------------------
+# Moved from the notebook's import cell. Named per role, not per chain letter,
+# so a chain pair that is not literally A and B still gets the right colours.
+
+COLOUR_A: str = "#009688"
+"""Teal. The first chain of the ordered pair."""
+
+COLOUR_B: str = "#FF7043"
+"""Coral. The second chain of the ordered pair."""
+
+COLOUR_IF: str = "#FFC107"
+"""Amber. Interface residues, in every figure and every 3D view."""
+
+COLOUR_NON_IF: str = "#CCCCCC"
+"""Light grey. Non-interface residues in the interface coverage bars."""
+
+COLOUR_NON_IF_HIST: str = "#607D8B"
+"""Slate. Non-interface residues in the pLDDT histogram, where the coverage
+bars' light grey would be invisible under 55% alpha."""
+
+CHAIN_COLOURS: Tuple[str, str] = (COLOUR_A, COLOUR_B)
+"""`(first, second)` chain colours, indexed by position in the ordered pair."""
+
+SCORE_PROFILE_COLOURS: Dict[str, str] = {
+    "iptm_d0chn": "#1976D2",
+    "ipsae_d0res": "#388E3C",
+    "ipsae_d0chn": "#F57C00",
+    "ipsae_d0dom": "#7B1FA2",
+}
+"""Line colour per per-residue score profile, keyed by `THRESHOLDS` key."""
+
+PLDDT_BANDS: Tuple[Tuple[float, str, str], ...] = (
+    (90.0, "#1565C0", ">90 (very high)"),
+    (70.0, "#42A5F5", "70–90 (confident)"),
+    (50.0, "#FFCA28", "50–70 (low)"),
+    (float("-inf"), "#EF6C00", "<50 (very low)"),
+)
+"""AlphaFold's own pLDDT colour ladder, ordered high to low as
+`(exclusive lower edge, colour, label)`. A residue takes the first band whose
+edge it is strictly above, matching AlphaFold's `> 90` / `> 70` / `> 50` tests.
+The en dashes in the labels are numeric ranges, not em dashes, and stay."""
+
+PLDDT_BAND_COLOURS: Tuple[str, ...] = tuple(colour for _, colour, _ in PLDDT_BANDS)
+"""Just the four colours of `PLDDT_BANDS`, high band first."""
+
+
+# -- colormaps --------------------------------------------------------------
+
+PAE_CMAP: str = "RdBu_r"
+"""Default colormap for every PAE figure. **This is the R051 seam.**
+
+Resolved at call time by `resolve_pae_cmap`, so reassigning
+`complex_interface_utils.PAE_CMAP` retunes every PAE figure at once, and R051
+becomes a one-line change of this default plus the accompanying prose.
+
+`'RdBu_r'` is a diverging map (0 = dark blue, mid = white, max = dark red) and is
+kept only because it is what the notebook draws today. R051 replaces it with a
+sequential green in which *dark* = low PAE = confident, so that confident regions
+stay legible against a white background; see `PAE_CMAP_CHOICES`.
+"""
+
+PAE_CMAP_CHOICES: Dict[str, str] = {
+    "rdbu": "RdBu_r",
+    "green": "Greens_r",
+    "colourblind_safe": "viridis_r",
+}
+"""Named shorthands accepted anywhere a PAE colormap is taken.
+
+Candidates for R051, which owns the final choice: `'green'` is the AFDB-style
+sequential green with dark = low PAE, and `'colourblind_safe'` is the
+perceptually uniform alternative for readers who cannot separate the green ramp.
+`'rdbu'` is the current default, retained for continuity.
+"""
+
+DIST_CMAP: str = "viridis_r"
+"""Colormap for the contact map, which shows *distance*, not PAE, and so is not
+governed by `PAE_CMAP`: dark = close = a tighter contact."""
+
+AGREEMENT_CMAP: str = "RdYlGn_r"
+"""Colormap for the score agreement matrix: green = the two scores agree."""
+
+SCORE_DISPLAY_NAMES: Dict[str, str] = {
+    "ipsae_d0res": "ipSAE_d0res",
+    "ipsae_d0chn": "ipSAE_d0chn",
+    "ipsae_d0dom": "ipSAE_d0dom",
+    "iptm_d0chn": "ipTM_d0chn",
+    "pdockq": "pDockQ",
+    "pdockq2": "pDockQ2",
+    "lis": "LIS",
+}
+"""Display label per `THRESHOLDS` key. `iptm_d0chn` is labelled with its full
+name rather than a bare "ipTM" because it is a PAE-derived reimplementation and
+not AlphaFold's own ipTM, which AFDB does not expose (R004)."""
+
+AGREEMENT_SCORES: Tuple[str, ...] = (
+    "ipsae_d0res",
+    "iptm_d0chn",
+    "pdockq",
+    "pdockq2",
+    "lis",
+)
+"""The five values the agreement matrix compares: one ipSAE variant plus the four
+independent scores. The other two ipSAE variants are excluded because
+`d0chn >= d0dom >= d0res` is a theorem, so including them would show three
+guaranteed agreements as if they were three confirmations."""
+
+
+def apply_plot_style(overrides: Optional[Mapping[str, Any]] = None) -> None:
+    """
+    Apply the notebook's seaborn style and `rcParams` to the global pyplot state.
+
+    Called explicitly, never on import: a module that restyled every figure in
+    the host process merely by being imported would be a side effect nobody
+    asked for, and would make this module unusable from a script that has its own
+    style.
+
+    Args:
+        overrides: Extra `rcParams` applied after `NOTEBOOK_RC_PARAMS`.
+
+    Note:
+        `figure.dpi` is 150 here, which is what makes the 10x9 inch PAE figure
+        1500x1350 px and triggers the notebook's in-cell scrollbar. R050 fixes
+        that by resizing the figure, not by lowering this.
+    """
+    sns.set_style("white")
+    plt.rcParams.update(NOTEBOOK_RC_PARAMS)
+    if overrides:
+        plt.rcParams.update(dict(overrides))
+
+
+def resolve_pae_cmap(cmap: Optional[str | Colormap] = None) -> Colormap:
+    """
+    Resolve a PAE colormap, honouring the module default.
+
+    The lookup order is: the explicit argument, then the module-level `PAE_CMAP`
+    read *now* rather than captured at definition time. That late read is the
+    whole point of the seam -- it is what lets R051 change one name and retune
+    every PAE figure.
+
+    Args:
+        cmap: A `Colormap`, a key of `PAE_CMAP_CHOICES`, a matplotlib colormap
+              name, or `None` for the module default.
+
+    Returns:
+        A `Colormap`.
+
+    Raises:
+        KeyError: If the name is neither a shorthand nor a registered colormap.
+
+    Example
+    -------
+    >>> resolve_pae_cmap().name
+    'RdBu_r'
+    >>> resolve_pae_cmap('green').name
+    'Greens_r'
+    >>> resolve_pae_cmap('viridis').name
+    'viridis'
+    """
+    requested = PAE_CMAP if cmap is None else cmap
+    if isinstance(requested, Colormap):
+        return requested
+    return matplotlib.colormaps[PAE_CMAP_CHOICES.get(requested, requested)]
+
+
+def _chain_label(chain_id: str, label: Optional[str] = None) -> str:
+    """`label` if given, else `'Chain <id>'`. R021 supplies real protein names."""
+    return label if label else f"Chain {chain_id}"
+
+
+def plddt_band_colour(value: float) -> str:
+    """
+    AlphaFold's colour for one pLDDT value.
+
+    Args:
+        value: A pLDDT score, 0-100.
+
+    Returns:
+        A hex colour from `PLDDT_BANDS`.
+
+    Example
+    -------
+    >>> plddt_band_colour(95.0), plddt_band_colour(90.0)
+    ('#1565C0', '#42A5F5')
+    >>> plddt_band_colour(60.0), plddt_band_colour(10.0)
+    ('#FFCA28', '#EF6C00')
+    """
+    for minimum, colour, _ in PLDDT_BANDS:
+        if value > minimum:
+            return colour
+    return PLDDT_BANDS[-1][1]
+
+
+def score_masks(
+    pair: ChainPairPAE,
+    contacts: InterfaceContacts,
+    pae_cutoff: float = PAE_CUTOFF,
+    lis_cutoff: float = LIS_CUTOFF,
+) -> Dict[str, np.ndarray]:
+    """
+    Which cells of the `x -> y` inter-chain PAE block each score actually reads.
+
+    One boolean mask per score, all on `pair.block_xy`, so the panel figure and
+    any printed summary agree by construction instead of rebuilding the cutoff
+    logic twice.
+
+    Args:
+        pair:       The ordered chain pair's PAE quadrants.
+        contacts:   Interface contacts of the **same** ordered pair; supplies the
+                    pDockQ2 mask.
+        pae_cutoff: ipSAE's inter-chain PAE cutoff, tested strictly.
+        lis_cutoff: LIS's PAE cutoff, tested strictly and independent of
+                    `pae_cutoff`.
+
+    Returns:
+        `{THRESHOLDS key: (nx, ny) bool mask}`, insertion-ordered as the panels
+        are drawn: ipTM, ipSAE, LIS, pDockQ2.
+
+    Raises:
+        ValueError: If `contacts` describes a different ordered pair, or a
+            differently shaped block, than `pair` -- which would silently mask
+            the PAE block with somebody else's contacts.
+
+    Example
+    -------
+    >>> block = np.array([[1.0, 11.0], [13.0, 2.0]], dtype=np.float32)
+    >>> pair = ChainPairPAE('A', 'B', block, block.T,
+    ...                     np.zeros((2, 2), dtype=np.float32),
+    ...                     np.zeros((2, 2), dtype=np.float32))
+    >>> contacts = InterfaceContacts('A', 'B', np.full((2, 2), 4.0, dtype=np.float32),
+    ...                              np.eye(2, dtype=bool), np.ones(2, dtype=bool),
+    ...                              np.ones(2, dtype=bool), 8.0)
+    >>> {name: int(mask.sum()) for name, mask in score_masks(pair, contacts).items()}
+    {'iptm_d0chn': 4, 'ipsae': 2, 'lis': 3, 'pdockq2': 2}
+    """
+    _check_same_pair(pair, contacts)
+    block = pair.block_xy
+    return {
+        "iptm_d0chn": np.ones(block.shape, dtype=bool),
+        "ipsae": block < pae_cutoff,
+        "lis": block < lis_cutoff,
+        "pdockq2": contacts.contact_mask.copy(),
+    }
+
+
+def _check_same_pair(pair: ChainPairPAE, contacts: InterfaceContacts) -> None:
+    """Raise unless `contacts` and `pair` describe the same ordered chain pair.
+
+    Mixing the two up produces a plausible figure rather than an error, so it is
+    checked. The shape test also catches the case where the PAE document and the
+    structure disagree on a chain length (`verify_chain_lengths`).
+    """
+    if (pair.chain_x, pair.chain_y) != (contacts.chain_x, contacts.chain_y):
+        raise ValueError(
+            f"PAE pair is ({pair.chain_x}, {pair.chain_y}) but contacts are "
+            f"({contacts.chain_x}, {contacts.chain_y}); both must be the same "
+            f"ordered pair."
+        )
+    if pair.block_xy.shape != contacts.contact_mask.shape:
+        raise ValueError(
+            f"PAE block is {pair.block_xy.shape} but the contact mask is "
+            f"{contacts.contact_mask.shape}."
+        )
+
+
+def plot_interface_contact_map(
+    contacts: InterfaceContacts,
+    label_x: Optional[str] = None,
+    label_y: Optional[str] = None,
+    cmap: str | Colormap = DIST_CMAP,
+    figsize: Tuple[float, float] = (14.0, 6.0),
+) -> Figure:
+    """
+    The interface: a distance-coloured contact map beside per-chain coverage bars.
+
+    Left panel: every contact within the cutoff, coloured by CB-CB distance, rows
+    `chain_x` and columns `chain_y`. Non-contacts are `nan` and so render as the
+    axes background. Right panel: one bar per residue of each chain, amber where
+    that residue touches the partner chain, showing *where along the sequence*
+    the interface sits -- one contiguous patch reads very differently from a
+    scatter of isolated residues.
+
+    Args:
+        contacts: Interface contacts of one ordered chain pair.
+        label_x:  Display name for `chain_x`; defaults to `'Chain <id>'`.
+        label_y:  Display name for `chain_y`.
+        cmap:     Colormap for the distance panel. Not `PAE_CMAP`: this panel
+                  shows distance, and the two must stay visually distinct.
+        figsize:  Figure size in inches.
+
+    Returns:
+        The `Figure`. Nothing is shown or saved; the caller decides.
+    """
+    name_x = _chain_label(contacts.chain_x, label_x)
+    name_y = _chain_label(contacts.chain_y, label_y)
+    nx, ny = contacts.contact_mask.shape
+
+    fig = Figure(figsize=figsize)
+    axes = fig.subplots(1, 2)
+
+    ax = axes[0]
+    contact_distances = np.where(contacts.contact_mask, contacts.dist_matrix, np.nan)
+    im = ax.imshow(contact_distances, aspect='auto', origin='lower',
+                   cmap=cmap, vmin=0, vmax=contacts.dist_cutoff)
+    fig.colorbar(im, ax=ax, label='CB-CB distance (Å)')
+    ax.set_xlabel(f'{name_y} residue index')
+    ax.set_ylabel(f'{name_x} residue index')
+    ax.set_title('Interface Contact Map\n'
+                 f'(contacts ≤ {contacts.dist_cutoff:.0f} Å, coloured by distance)')
+
+    ax2 = axes[1]
+    bar_height = 0.35
+    for mask, bottom in ((contacts.mask_x, 0.6), (contacts.mask_y, 0.1)):
+        ax2.bar(np.arange(len(mask)), bar_height, bottom=bottom,
+                color=[COLOUR_IF if is_if else COLOUR_NON_IF for is_if in mask],
+                width=1.0, linewidth=0)
+
+    ax2.set_xlim(0, max(nx, ny))
+    ax2.set_ylim(0, 1.1)
+    ax2.set_yticks([0.275, 0.775])
+    ax2.set_yticklabels([name_y, name_x])
+    ax2.set_xlabel('Residue index')
+    ax2.set_title('Interface Coverage\n'
+                  '(amber = at interface, grey = non-interface)')
+    ax2.legend(
+        handles=[mpatches.Patch(color=COLOUR_IF, label='Interface'),
+                 mpatches.Patch(color=COLOUR_NON_IF, label='Non-interface')],
+        loc='upper right', fontsize=9)
+
+    fig.tight_layout()
+    return fig
+
+
+def plot_pae_matrix(
+    pae: PAEMatrix,
+    chain_x: Optional[str] = None,
+    chain_y: Optional[str] = None,
+    accession: str = "",
+    cmap: Optional[str | Colormap] = None,
+    figsize: Tuple[float, float] = (10.0, 9.0),
+) -> Figure:
+    """
+    The full PAE matrix, with the chain boundary and the four quadrants labelled.
+
+    The point of showing the whole matrix rather than the inter-chain block alone
+    is that the two intra-chain quadrants are the control: a model can be
+    confident about each chain in isolation and have no idea how they sit
+    together, and that reads instantly as two dark diagonal blocks with a pale
+    off-diagonal.
+
+    Args:
+        pae:       The parsed PAE document.
+        chain_x:   Chain to label as the first of the pair; defaults to the first
+                   chain in matrix layout order.
+        chain_y:   The second; defaults to the second chain in layout order.
+        accession: Shown in the title when given.
+        cmap:      Colormap override; `None` uses `PAE_CMAP` (the R051 seam).
+        figsize:   Figure size in inches. `(10, 9)` at `figure.dpi = 150` is
+                   1500x1350 px, which overflows the notebook output area --
+                   preserved deliberately here and fixed by R050.
+
+    Returns:
+        The `Figure`.
+
+    Raises:
+        ValueError: If the document has fewer than two chains, or if `chain_x`
+            and `chain_y` are the same chain.
+        KeyError:   If a named chain is not in the document.
+
+    Note:
+        `aspect='auto'` is what the notebook uses, and it stretches the matrix to
+        the axes box, so a heterodimer's square matrix renders non-square. R050
+        switches it to `'equal'`.
+    """
+    ids = pae.chain_ids
+    if len(ids) < 2:
+        raise ValueError(
+            f"A PAE matrix needs at least two chains to have quadrants; got {ids}."
+        )
+    chain_x = ids[0] if chain_x is None else chain_x
+    chain_y = ids[1] if chain_y is None else chain_y
+    if chain_x == chain_y:
+        raise ValueError(f"Need two distinct chains, got {chain_x!r} twice.")
+
+    fig = Figure(figsize=figsize)
+    ax = fig.subplots()
+
+    im = ax.imshow(pae.matrix, aspect='auto', origin='upper',
+                   cmap=resolve_pae_cmap(cmap), vmin=0, vmax=pae.max_pae)
+    fig.colorbar(im, ax=ax, label='PAE (Å) — lower = more confident')
+
+    # One dashed line per internal chain boundary. Two chains give the notebook's
+    # single pair of lines at nx - 0.5; more chains give one pair each.
+    offset = 0
+    for span in pae.spans[:-1]:
+        offset += span.length
+        ax.axhline(offset - 0.5, color='white', linewidth=2, linestyle='--')
+        ax.axvline(offset - 0.5, color='white', linewidth=2, linestyle='--')
+
+    def _centre(chain_id: str) -> float:
+        span_slice = pae.chain_slice(chain_id)
+        return (span_slice.start + span_slice.stop) / 2.0
+
+    cx, cy = _centre(chain_x), _centre(chain_y)
+    for col, row, text in ((cx, cx, f'Intra {chain_x}'),
+                           (cy, cx, f'Inter\n{chain_x}→{chain_y}'),
+                           (cx, cy, f'Inter\n{chain_y}→{chain_x}'),
+                           (cy, cy, f'Intra {chain_y}')):
+        ax.text(col, row, text, ha='center', va='center',
+                color='white', fontsize=11, fontweight='bold', alpha=0.8)
+
+    if len(ids) == 2:
+        first, second = ids
+        ax.set_xlabel(f'Residue index (chain {first}: 0 to n{first}-1, '
+                      f'chain {second}: n{first} to end)')
+    else:
+        ax.set_xlabel('Residue index')
+    ax.set_ylabel('Residue index')
+    head = f'Full PAE Matrix — {accession}' if accession else 'Full PAE Matrix'
+    ax.set_title(f'{head}\n'
+                 f'(dashed line = chain boundary between {chain_x} and {chain_y})')
+
+    fig.tight_layout()
+    return fig
+
+
+def plot_pae_score_masks(
+    pair: ChainPairPAE,
+    contacts: InterfaceContacts,
+    max_pae: float,
+    pae_cutoff: float = PAE_CUTOFF,
+    lis_cutoff: float = LIS_CUTOFF,
+    label_x: Optional[str] = None,
+    label_y: Optional[str] = None,
+    cmap: Optional[str | Colormap] = None,
+    figsize: Tuple[float, float] = (14.0, 12.0),
+) -> Figure:
+    """
+    Four views of the same inter-chain PAE block: what each score actually reads.
+
+    Every panel shows `pair.block_xy`; they differ only in which cells are left
+    coloured. This is the figure that explains why four scores computed from one
+    matrix can disagree -- they are not weighting the same evidence differently,
+    they are reading different subsets of it.
+
+    Args:
+        pair:       The ordered chain pair's PAE quadrants.
+        contacts:   Interface contacts of the **same** ordered pair.
+        max_pae:    `vmax`; use `PAEMatrix.max_pae` so every PAE figure of one
+                    model shares a scale.
+        pae_cutoff: ipSAE's cutoff, named in the panel title rather than
+                    hard-coded into it.
+        lis_cutoff: LIS's cutoff, likewise.
+        label_x:    Display name for `chain_x`.
+        label_y:    Display name for `chain_y`.
+        cmap:       Colormap override; `None` uses `PAE_CMAP`.
+        figsize:    Figure size in inches.
+
+    Returns:
+        The `Figure`. Per-panel cell counts are in the panel titles; the same
+        masks are available from `score_masks` if a caller wants the numbers.
+
+    Raises:
+        ValueError: If `contacts` and `pair` are not the same ordered pair.
+
+    Note:
+        Two known defects are preserved here on purpose and are R052's to fix.
+        The colour bar is attached to the last axis alone, so the fourth panel
+        renders narrower than the other three; and `aspect='auto'` distorts every
+        block whenever `nx != ny`.
+    """
+    name_x = _chain_label(contacts.chain_x, label_x)
+    name_y = _chain_label(contacts.chain_y, label_y)
+    masks = score_masks(pair, contacts, pae_cutoff=pae_cutoff, lis_cutoff=lis_cutoff)
+    titles = {
+        'iptm_d0chn': 'ipTM  (all inter-chain, no cutoff)',
+        'ipsae': f'ipSAE (PAE < {pae_cutoff:.0f} Å)',
+        'lis': f'LIS   (PAE < {lis_cutoff:.0f} Å)',
+        'pdockq2': f'pDockQ2 (CB-CB ≤ {contacts.dist_cutoff:.0f} Å contacts)',
+    }
+    block = pair.block_xy
+    n_cells_total = block.size
+
+    fig = Figure(figsize=figsize)
+    axes = fig.subplots(2, 2).ravel()
+
+    im = None
+    for ax, (key, mask) in zip(axes, masks.items()):
+        display_pae = block.astype(float).copy()
+        display_pae[~mask] = np.nan
+        grey_bg = np.ones(block.shape) * 35   # out-of-range sentinel
+
+        ax.imshow(grey_bg, aspect='auto', origin='upper',
+                  cmap='Greys', vmin=0, vmax=40, alpha=0.3)
+        im = ax.imshow(display_pae, aspect='auto', origin='upper',
+                       cmap=resolve_pae_cmap(cmap), vmin=0, vmax=max_pae)
+        n_cells = int(mask.sum())
+        frac = 100.0 * n_cells / n_cells_total if n_cells_total else 0.0
+        ax.set_title(f'{titles[key]}\n({n_cells} cells used, '
+                     f'{frac:.1f}% of inter-chain block)', fontsize=10)
+        ax.set_xlabel(f'{name_y} residue')
+        ax.set_ylabel(f'{name_x} residue')
+
+    # Preserved defect (R052): one colour bar on the last axis only.
+    fig.colorbar(im, ax=axes[-1], label='PAE (Å)')
+    fig.suptitle(f'{contacts.chain_x}→{contacts.chain_y} Inter-chain PAE Block: '
+                 'cells used by each score\n(grey = not used by this score)',
+                 fontsize=12, y=1.01)
+    fig.tight_layout()
+    return fig
+
+
+def plot_residue_score_profiles(
+    iptm: DirectionalPair,
+    ipsae: IPSAEResult,
+    contacts: InterfaceContacts,
+    plddt_x: np.ndarray,
+    plddt_y: np.ndarray,
+    label_x: Optional[str] = None,
+    label_y: Optional[str] = None,
+    figsize: Tuple[float, float] = (14.0, 10.0),
+) -> Figure:
+    """
+    Per-residue score profiles, one panel per direction of the chain pair.
+
+    Every score reported for a complex is one residue's number -- the maximum
+    over the profile -- so this figure is where a headline value stops being a
+    verdict and becomes a location: which residues carry the interface, whether
+    the three ipSAE variants rank the same residue highest, and whether the peak
+    sits on well-predicted backbone or on a low-pLDDT loop.
+
+    The top panel is the `x -> y` direction (rows of `block_xy`, so residues of
+    `chain_x`); the bottom is `y -> x`. They are genuinely two measurements, not
+    one seen twice, because PAE is asymmetric.
+
+    Args:
+        iptm:     `compute_iptm_d0chn` result for the ordered pair.
+        ipsae:    `compute_ipsae` result for the same ordered pair.
+        contacts: Interface contacts of the same ordered pair; supplies the
+                  shaded interface regions.
+        plddt_x:  `(nx,)` pLDDT for `chain_x`.
+        plddt_y:  `(ny,)` pLDDT for `chain_y`.
+        label_x:  Display name for `chain_x`.
+        label_y:  Display name for `chain_y`.
+        figsize:  Figure size in inches.
+
+    Returns:
+        The `Figure`.
+
+    Raises:
+        ValueError: If the three results do not describe the same ordered chain
+            pair, or if a pLDDT array's length does not match its chain.
+    """
+    pair_ids = (contacts.chain_x, contacts.chain_y)
+    for name, result in (('ipTM', iptm), ('ipSAE', ipsae)):
+        if (result.chain_x, result.chain_y) != pair_ids:
+            raise ValueError(
+                f"{name} describes pair ({result.chain_x}, {result.chain_y}) but "
+                f"the contacts describe {pair_ids}; all three must agree."
+            )
+
+    panels = (
+        (_chain_label(contacts.chain_x, label_x), 'forward',
+         contacts.mask_x, np.asarray(plddt_x)),
+        (_chain_label(contacts.chain_y, label_y), 'reverse',
+         contacts.mask_y, np.asarray(plddt_y)),
+    )
+
+    fig = Figure(figsize=figsize)
+    axes = fig.subplots(2, 1, sharex=False)
+
+    for ax, (chain_label, direction, if_mask, plddt_chain) in zip(axes, panels):
+        profiles = {
+            'iptm_d0chn': getattr(iptm, direction),
+            'ipsae_d0res': getattr(ipsae.d0res, direction),
+            'ipsae_d0chn': getattr(ipsae.d0chn, direction),
+            'ipsae_d0dom': getattr(ipsae.d0dom, direction),
+        }
+        n_res = profiles['iptm_d0chn'].values.shape[0]
+        if plddt_chain.shape[0] != n_res:
+            raise ValueError(
+                f"{chain_label} has {n_res} residues in its score profile but "
+                f"{plddt_chain.shape[0]} pLDDT values."
+            )
+        x = np.arange(n_res)
+
+        ax.plot(x, profiles['iptm_d0chn'].values, label='ipTM',
+                color=SCORE_PROFILE_COLOURS['iptm_d0chn'], linewidth=1.5)
+        ax.plot(x, profiles['ipsae_d0res'].values, label='ipSAE d0res',
+                color=SCORE_PROFILE_COLOURS['ipsae_d0res'], linewidth=1.5)
+        ax.plot(x, profiles['ipsae_d0chn'].values, label='ipSAE d0chn',
+                color=SCORE_PROFILE_COLOURS['ipsae_d0chn'], linewidth=1.2,
+                linestyle='--')
+        ax.plot(x, profiles['ipsae_d0dom'].values, label='ipSAE d0dom',
+                color=SCORE_PROFILE_COLOURS['ipsae_d0dom'], linewidth=1.2,
+                linestyle=':')
+
+        # Secondary axis: pLDDT, on its own 0-100 scale.
+        ax_plddt = ax.twinx()
+        ax_plddt.fill_between(x, plddt_chain, alpha=0.15, color='grey', label='pLDDT')
+        ax_plddt.set_ylabel('pLDDT (grey fill)', color='grey', fontsize=10)
+        ax_plddt.set_ylim(0, 100)
+        ax_plddt.tick_params(axis='y', labelcolor='grey')
+
+        ax.fill_between(x, 0, 1, where=if_mask, alpha=0.12, color=COLOUR_IF,
+                        label='Interface region')
+        ax.set_ylim(0, 1)
+        ax.set_xlabel('Residue index')
+        ax.set_ylabel('Per-residue score (0–1)')
+        ax.set_title(f'Per-Residue Score Profiles — {chain_label}')
+        ax.legend(loc='upper left', fontsize=9)
+
+    fig.tight_layout()
+    return fig
+
+
+def plot_plddt_distribution(
+    contacts: InterfaceContacts,
+    plddt_x: np.ndarray,
+    plddt_y: np.ndarray,
+    label_x: Optional[str] = None,
+    label_y: Optional[str] = None,
+    figsize: Tuple[float, float] = (14.0, 5.0),
+) -> Figure:
+    """
+    Interface pLDDT against the rest of the model, as a histogram and a profile.
+
+    pDockQ and pDockQ2 both average pLDDT over interface residues, so a low score
+    has two very different causes: a globally uncertain protein, or a confident
+    protein with an uncertain interface. The left panel separates them; the right
+    panel says *where* the uncertain residues are, in AlphaFold's own colours.
+
+    Args:
+        contacts: Interface contacts of one ordered chain pair.
+        plddt_x:  `(nx,)` pLDDT for `chain_x`.
+        plddt_y:  `(ny,)` pLDDT for `chain_y`.
+        label_x:  Display name for `chain_x`.
+        label_y:  Display name for `chain_y`.
+        figsize:  Figure size in inches.
+
+    Returns:
+        The `Figure`.
+
+    Raises:
+        ValueError: If a pLDDT array's length does not match its chain's, which
+            would silently pair each residue with somebody else's confidence.
+    """
+    plddt_x = np.asarray(plddt_x)
+    plddt_y = np.asarray(plddt_y)
+    nx, ny = contacts.contact_mask.shape
+    if plddt_x.shape[0] != nx or plddt_y.shape[0] != ny:
+        raise ValueError(
+            f"Chains are ({nx}, {ny}) residues but pLDDT arrays are "
+            f"({plddt_x.shape[0]}, {plddt_y.shape[0]})."
+        )
+
+    # Short labels here: these two strings read as sequence landmarks
+    # ("A then B"), not as panel headings, so they take the bare chain id.
+    name_x = label_x if label_x else contacts.chain_x
+    name_y = label_y if label_y else contacts.chain_y
+
+    if_plddt = np.concatenate([plddt_x[contacts.mask_x], plddt_y[contacts.mask_y]])
+    ni_plddt = np.concatenate([plddt_x[~contacts.mask_x], plddt_y[~contacts.mask_y]])
+
+    fig = Figure(figsize=figsize)
+    axes = fig.subplots(1, 2)
+
+    ax = axes[0]
+    bins = np.linspace(0, 100, 26)
+    ax.hist(ni_plddt, bins=bins, alpha=0.55, color=COLOUR_NON_IF_HIST,
+            label=f'Non-interface (n={len(ni_plddt)})', density=True)
+    ax.hist(if_plddt, bins=bins, alpha=0.65, color=COLOUR_IF,
+            label=f'Interface (n={len(if_plddt)})', density=True)
+    ax.axvline(70, color='grey', linestyle='--', linewidth=1,
+               label='pLDDT = 70 (threshold)')
+    ax.set_xlabel('pLDDT score')
+    ax.set_ylabel('Density')
+    ax.set_title('pLDDT distribution: interface vs non-interface')
+    ax.legend(fontsize=9)
+
+    ax2 = axes[1]
+    full_plddt = np.concatenate([plddt_x, plddt_y])
+    full_x = np.arange(len(full_plddt))
+    full_if = np.concatenate([contacts.mask_x, contacts.mask_y])
+
+    ax2.bar(full_x, full_plddt,
+            color=[plddt_band_colour(v) for v in full_plddt],
+            width=1.0, linewidth=0)
+    ax2.fill_between(full_x, 0, 100, where=full_if, alpha=0.18, color=COLOUR_IF,
+                     label='Interface residues')
+    ax2.axvline(nx - 0.5, color='black', linewidth=1.5, linestyle='--',
+                label=f'Chain {name_x}/{name_y} boundary')
+    ax2.axhline(70, color='grey', linestyle=':', linewidth=1)
+    ax2.set_xlabel(f'Residue index ({name_x} then {name_y})')
+    ax2.set_ylabel('pLDDT')
+    ax2.set_title('Per-residue pLDDT profile (AlphaFold colour scheme)')
+
+    legend_patches = [
+        mpatches.Patch(color=colour, label=label)
+        for _, colour, label in PLDDT_BANDS
+    ]
+    legend_patches.append(
+        mpatches.Patch(color=COLOUR_IF, alpha=0.5, label='Interface region'))
+    ax2.legend(handles=legend_patches, fontsize=8, loc='lower right')
+
+    fig.tight_layout()
+    return fig
+
+
+def plot_score_agreement(
+    scores: Mapping[str, float],
+    score_names: Optional[Tuple[str, ...]] = None,
+    labels: Optional[Mapping[str, str]] = None,
+    cap: float = 1.5,
+    cmap: str | Colormap = AGREEMENT_CMAP,
+    figsize: Tuple[float, float] = (7.0, 6.0),
+) -> Figure:
+    """
+    How far apart the scores are once each is expressed in units of its own cutoff.
+
+    The scores are on incomparable scales, so `0.30` means something different for
+    LIS than for pDockQ. Dividing each by its own green threshold puts them all in
+    "fraction of the bar it has to clear", after which `|a - b|` is a meaningful
+    disagreement. A dark red cell is the interesting case: two methods reading the
+    same model and reaching opposite verdicts.
+
+    Args:
+        scores:      `{THRESHOLDS key: value}`. Extra keys are ignored.
+        score_names: Which values to compare, in display order; defaults to
+                     `AGREEMENT_SCORES`.
+        labels:      Display names; defaults to `SCORE_DISPLAY_NAMES`.
+        cap:         Upper clamp on the normalised value, so one score far past
+                     its threshold cannot flatten the rest of the scale.
+        cmap:        Colormap; green = agreement.
+        figsize:     Figure size in inches.
+
+    Returns:
+        The `Figure`.
+
+    Raises:
+        KeyError: If a requested score is missing from `scores`, or is not a
+            `THRESHOLDS` key -- there would be no cutoff to normalise it by.
+
+    Note:
+        Normalisation reads `THRESHOLDS[name].green`, the canonical table, which
+        is not the ad-hoc threshold dict the notebook still carries inline; the
+        numbers here therefore differ from the notebook's until R016 switches its
+        summary table over too.
+    """
+    names = AGREEMENT_SCORES if score_names is None else tuple(score_names)
+    display = dict(SCORE_DISPLAY_NAMES if labels is None else labels)
+
+    missing = [name for name in names if name not in scores]
+    if missing:
+        raise KeyError(f"No value supplied for: {', '.join(missing)}.")
+    unknown = [name for name in names if name not in THRESHOLDS]
+    if unknown:
+        raise KeyError(
+            f"No canonical threshold for: {', '.join(unknown)}. "
+            f"Expected keys from THRESHOLDS: {', '.join(sorted(THRESHOLDS))}."
+        )
+
+    normalised = np.array(
+        [min(float(scores[name]) / THRESHOLDS[name].green, cap) for name in names]
+    )
+    agreement = np.abs(normalised[:, np.newaxis] - normalised[np.newaxis, :])
+    n_s = len(names)
+
+    fig = Figure(figsize=figsize)
+    ax = fig.subplots()
+    im = ax.imshow(agreement, cmap=cmap, vmin=0, vmax=1)
+    fig.colorbar(im, ax=ax,
+                 label='Normalised disagreement (0=agree, 1=strongly disagree)')
+
+    tick_labels = [display.get(name, name) for name in names]
+    ax.set_xticks(range(n_s))
+    ax.set_yticks(range(n_s))
+    ax.set_xticklabels(tick_labels, rotation=30, ha='right')
+    ax.set_yticklabels(tick_labels)
+    for i in range(n_s):
+        for j in range(n_s):
+            ax.text(j, i, f'{agreement[i, j]:.2f}', ha='center', va='center',
+                    fontsize=9, color='black')
+    ax.set_title('Pairwise Score Agreement Matrix\n'
+                 '(dark green = agree, dark red = strongly disagree)')
+
+    fig.tight_layout()
+    return fig
 
 
 # ---------------------------------------------------------------------------
