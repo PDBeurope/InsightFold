@@ -468,7 +468,7 @@ or a small `ChainPair` object rather than assuming "A and B".
 **Covers cells 13, 15, 16, 20, 22, 27.** Each becomes a `plot_*` function returning `fig`,
 so the notebook cell is one call plus a title. Palette handling from R051 lives here.
 
-### `[ ] R014 — Move MolViewSpec builders into the module`
+### `[x] R014 — Move MolViewSpec builders into the module` — DONE 2026-09-08
 
 **Covers cell 24.** One builder function per view, plus the shared `show_mol_view` helper.
 Interacts with everything in W7.
@@ -561,6 +561,46 @@ carry the R003/R007 directional fixes, so their data genuinely differs. The agre
 normalises by `THRESHOLDS[...].green` instead of the notebook's stale inline dict and labels
 the score `ipTM_d0chn` per R004 — preserving the old numbers there would have meant preserving
 thresholds R002/R009 corrected.
+
+
+**R014 verification, 2026-09-08.** Behaviour-preserving move, same discipline as R013. A
+verbatim replica of notebook cell 24 was built alongside the module builders on identical
+inputs: residue→colour maps and whole-structure components matched on all eight views across
+both fixtures.
+
+**Component-count reduction from collapsing contiguous same-colour runs.** The notebook emits
+one `ComponentExpression` per residue even though the API supports ranges.
+
+| Fixture | View | Before | After |
+|---------|------|--------|-------|
+| homodimer | pLDDT | 344 | **12** |
+| homodimer | disagreement | 154 | 31 |
+| homodimer | chain overview | 43 | 13 |
+| heterodimer | pLDDT | **282** | **32** |
+| heterodimer | disagreement | 26 | 13 |
+
+Residue→colour mapping verified identical in every case, so this is payload only, not a render
+change. View 3 barely collapses (86→83) because adjacent interface residues rarely share an
+exact colour off a continuous ramp — which is itself evidence the collapse merges nothing it
+should not.
+
+**Implementation defects fixed (R075 subset).** Deprecated `cm.get_cmap` replaced; hard-coded
+`label_asym_id='A'`/`'B'` in views 3 and 4 replaced with resolved chain ids; and the
+url/format mismatch resolved — `resolve_structure_source` makes one decision for both, treats
+a present-but-empty field as absent, and raises rather than handing Mol* an empty URL labelled
+`bcif` (exactly what the `USE_LOCAL_FILE` path built).
+
+**Seam for R074.** `build_interface_value_view` is deliberately score-agnostic: it takes any
+per-residue value array plus a colormap. R074's two pDockQ2 views are therefore calls to
+existing code, not new builders.
+
+**Finding for M6 — two pLDDT ladders disagree.** `MVS_PLDDT_BANDS` (3D) uses half-open
+intervals with inclusive-below edges, so a residue at exactly 100.00 matches no band and is
+not drawn, and 90.0 lands in the top band; the 2D `plddt_band_colour` puts 90.0 in the second
+band. Preserved rather than silently reconciled, because changing either shifts colours in a
+figure the user has not reviewed. **R070/R072 must reconcile them when View 2 gains its
+legend** — a legend that disagrees with the colours it explains would be worse than the
+current inconsistency.
 
 ## W2 — Heterodimer support
 
@@ -1018,7 +1058,7 @@ review.
 | # | Milestone | Tasks | n | Status |
 |---|-----------|-------|---|--------|
 | M1 | Ground truth | R001, R002, R002b, R009 | 4 | R002b added 2026-09-08 |
-| M2 | Module extracted; **R016 is where the notebook actually shrinks** | R010, R010b, R011-R016 | 8 | R010, R010b, R011, R012, R013 done |
+| M2 | Module extracted; **R016 is where the notebook actually shrinks** | R010, R010b, R011-R016 | 8 | R010, R010b, R011-R014 done |
 | M3 | Heterodimer support | R020-R024 | 5 | |
 | M4 | Scoring correctness + Section 4 | R003-R008, R060-R062 | 9 | R003, R005, R006, R007 landed early in R012 |
 | M5 | PAE visuals | R050-R052 | 3 | |

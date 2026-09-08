@@ -88,12 +88,19 @@ structure parsing, PAE / pLDDT parsing and interface detection (R011), the share
 scoring primitives (the two `d0` helpers and `ptm_func`), the seven score
 functions (R012, landing R003 / R005 / R006 / R007), the threshold table with
 its traffic light and the AFDB joint criterion, and the six matplotlib figures
-(R013). Still to come: the MolViewSpec views (R014).
+(R013), and the four MolViewSpec 3D views with their shared display helper
+(R014). Nothing is now left unimplemented.
 
 The plotting section is a behaviour-preserving move of the notebook's inline
 figures, not a redesign: the sizing (R050), the palette (R051) and the
 score-mask panel (R052) are corrected later, and `PAE_CMAP` is the seam R051
 changes.
+
+The MolViewSpec section is likewise a behaviour-preserving move: R070-R075 and
+R030 redesign the views, and the four defects R075 lists that change no pixel
+(the deprecated `cm.get_cmap`, one component per residue, hard-coded chain
+letters, and the structure URL and format being resolved separately) are fixed
+here while everything visual is left exactly as the notebook draws it.
 
 The notebook still carries its own inline copies of the scoring code and still
 runs off them; R016 switches the call sites over.
@@ -101,8 +108,9 @@ runs off them; R016 switches the call sites over.
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple
 
 import matplotlib
 import matplotlib.patches as mpatches
@@ -213,6 +221,34 @@ __all__ = [
     "plot_residue_score_profiles",
     "plot_plddt_distribution",
     "plot_score_agreement",
+    # MolViewSpec: capability check
+    "MOLVIEWSPEC_MISSING_MESSAGE",
+    "molviewspec_available",
+    # MolViewSpec: view constants
+    "MVS_VIEW_WIDTH",
+    "MVS_VIEW_HEIGHT",
+    "MVS_CONTEXT_COLOUR",
+    "MVS_FAINT_COLOUR",
+    "MVS_VALUE_CMAP",
+    "MVS_PLDDT_BANDS",
+    "MVS_DISAGREEMENT_THRESHOLD",
+    "MVS_DISAGREEMENT_CATEGORIES",
+    "MVS_VIEW_LABELS",
+    # MolViewSpec: structure source
+    "StructureSource",
+    "resolve_structure_source",
+    # MolViewSpec: per-residue colouring
+    "ColourRun",
+    "colour_runs",
+    "value_colours",
+    "add_residue_colours",
+    # MolViewSpec: display and builders
+    "show_mol_view",
+    "build_chain_overview_view",
+    "build_plddt_view",
+    "build_interface_value_view",
+    "disagreement_categories",
+    "build_disagreement_view",
 ]
 
 
@@ -4182,10 +4218,876 @@ def plot_score_agreement(
 
 
 # ---------------------------------------------------------------------------
-# MolViewSpec views  --  filled by R014
+# MolViewSpec views
 # ---------------------------------------------------------------------------
 # One builder function per 3D view, plus the shared `show_mol_view` helper.
 #
 # `molviewspec` MUST be imported lazily inside each builder, never at module top
 # level, so that importing this module stays free and so the notebook degrades
-# gracefully with a clear message when the package is absent.
+# gracefully with a clear message when the package is absent. `molviewspec_available()`
+# is the capability check a caller uses to decide whether to draw the section at
+# all; `_require_molviewspec()` is what every builder calls on entry.
+#
+# Three deliberate properties of this section, mirroring the plotting section:
+#
+# 1. **Builders return a `State`, they do not render.** `show_mol_view` is the
+#    only function that touches `IPython.display`, so a builder can be exercised
+#    head-lessly by a test and a caller decides when and how big to draw.
+# 2. **Chain-pair-generic (D4).** No `'A'` / `'B'` literals. Every builder takes
+#    the ordered pair from the `InterfaceContacts` it is handed and looks the
+#    chain up in the `{chain_id: ChainCoords}` mapping `parse_structure` returns,
+#    so a complex whose chains are labelled `A` and `C` renders correctly.
+# 3. **Per-residue colouring goes through one primitive.** `colour_runs` plus
+#    `add_residue_colours` is the only place a residue is turned into a
+#    component, and `value_colours` is the only place a number is turned into a
+#    colour. That pairing -- an arbitrary per-residue value array plus a
+#    colormap -- is exactly what View 3 does today and exactly what R072 and
+#    R074 need, so the two new pDockQ2 views are calls to
+#    `build_interface_value_view`, not new colouring code.
+#
+# Run collapsing (R075)
+# ---------------------
+# `ComponentExpression` has always taken `beg_label_seq_id` / `end_label_seq_id`;
+# the notebook simply always passed `beg == end`, so View 2 emitted one component
+# per residue -- 282 of them on the heterodimer fixture. `colour_runs` merges
+# residues that are *both* consecutive in `label_seq_id` *and* the same colour
+# into one ranged expression. Consecutiveness is required, not just equal colour,
+# because a ranged selector covers everything between the two endpoints: merging
+# across a gap in the numbering would paint residues that were never in the
+# input. A residue with no colour therefore also breaks a run, which is what
+# keeps the pLDDT view's uncoloured residues uncoloured.
+#
+# What this section deliberately does NOT do
+# ------------------------------------------
+# R014 is a behaviour-preserving move, on the same reasoning as R013: a 3D view
+# has no objective oracle, so a visual change landed here would be
+# indistinguishable from a regression. Preserved exactly as the notebook draws
+# them today, and owned by M6:
+#
+# - side chains on the first chain only in Views 1 and 4 (R071, R073);
+# - the bare "red=low, yellow=mid, green=high" colour scale of View 3, with no
+#   legend and no stated numbers (R072);
+# - View 4's magic `0.5` cutoff, unrelated to any threshold in `THRESHOLDS`, its
+#   colour-key category names, and its missing legend (R073);
+# - no pDockQ2 view at all (R074);
+# - no supporting prose anywhere (R070).
+#
+# The seams those tasks change are named on each function: `side_chain_colours`,
+# `bands`, `cmap` / `vmin` / `vmax`, `threshold`, `categories` and
+# `MVS_VIEW_LABELS`.
+#
+# Four implementation defects ARE fixed here, because each is a defect rather
+# than a design choice and none of them changes a pixel (R075): the deprecated
+# `matplotlib.cm.get_cmap`, the one-component-per-residue payload, the hard-coded
+# chain letters, and the structure URL and format being resolved from two
+# independent expressions that disagree when `bcifUrl` is present but empty.
+
+
+# -- view constants ---------------------------------------------------------
+# Every colour, cutoff and label the four views use, named once. Section 6 of the
+# notebook currently spells all of these inline; naming them here is what makes
+# R070-R074 edits to *this list* rather than edits inside the builders.
+
+MVS_VIEW_WIDTH: int = 950
+"""Default viewer width in pixels. Fits a notebook cell at the usual zoom."""
+
+MVS_VIEW_HEIGHT: int = 600
+"""Default viewer height in pixels."""
+
+MVS_CONTEXT_COLOUR: str = "#BDBDBD"
+"""Mid grey. The whole-complex cartoon behind View 3's coloured interface, dark
+enough to read as structure and light enough not to compete with the colours."""
+
+MVS_FAINT_COLOUR: str = "#EEEEEE"
+"""Near-white. The whole-complex cartoon behind View 4, fainter than
+`MVS_CONTEXT_COLOUR` because View 4's three categories are its entire message."""
+
+MVS_VALUE_CMAP: str = "RdYlGn"
+"""Colormap for any per-residue score painted onto a structure: red = low,
+green = high. Resolved through `matplotlib.colormaps`, never through the
+deprecated `matplotlib.cm.get_cmap` the notebook calls (R075).
+
+R072 owns making the mapping legible -- the numbers behind "low" and "high", and
+a colour bar or legend. This constant is the seam if the ramp itself changes."""
+
+MVS_PLDDT_BANDS: Tuple[Tuple[float, float, str, str], ...] = (
+    (90.0, 100.0, "#1565C0", ">90 (very high)"),
+    (70.0, 90.0, "#42A5F5", "70–90 (confident)"),
+    (50.0, 70.0, "#FFCA28", "50–70 (low)"),
+    (0.0, 50.0, "#EF6C00", "<50 (very low)"),
+)
+"""pLDDT bands for the 3D view, as `(low, high, colour, label)` tested
+`low <= value < high`.
+
+Two differences from `PLDDT_BANDS`, both preserved from the notebook on purpose:
+
+- **The bands are half-open intervals, not one-sided tests.** A residue at
+  exactly 100.0 or below 0.0 matches no band and is therefore not drawn at all.
+  AFDB writes pLDDT to two decimals in the B-factor column and a residue does
+  occasionally reach 100.00.
+- **The edges are inclusive-below, not exclusive.** 90.0 lands in the top band
+  here and in the second band under `plddt_band_colour`, which tests
+  `value > 90`.
+
+Both are visible defects and neither is R014's to fix: this task is a
+behaviour-preserving move and a 3D view has no oracle. Reconciling the two
+ladders belongs with the M6 pass that gives the view a legend."""
+
+MVS_DISAGREEMENT_THRESHOLD: float = 0.5
+"""Per-residue score above which View 4 calls PAE "confident".
+
+**A magic number, and known to be one.** It is unrelated to every cutoff in
+`THRESHOLDS`, and R073 replaces it with the R002 ipSAE threshold. Kept at 0.5
+here only so that R014 reproduces what the notebook draws today."""
+
+MVS_DISAGREEMENT_CATEGORIES: Tuple[Tuple[str, str, str], ...] = (
+    ("agree", "#4CAF50", "PAE+contact agree"),
+    ("pae_only", "#2196F3", "PAE confident, no contact"),
+    ("contact_only", "#F44336", "Contact, low PAE confidence"),
+)
+"""View 4's three categories, as `(key, colour, label)`.
+
+The notebook builds exactly this table and then discards the label element with
+`_`, so the legend was clearly intended and never drawn. The labels are carried
+here so R073 can draw it, and so the category names can be rewritten in terms a
+reader can act on rather than as a colour key."""
+
+MVS_VIEW_LABELS: Dict[str, str] = {
+    "chain_overview": "View 1: Chain Overview (teal=A, coral=B, amber=interface)",
+    "plddt": ("View 2: pLDDT Mapping "
+              "(dark blue>90, light blue 70–90, yellow 50–70, orange<50)"),
+    "interface_value": ("View 3: Interface ipSAE d0res score "
+                        "(red=low, yellow=mid, green=high)"),
+    "disagreement": ("View 4: Disagreement (green=PAE+contact, "
+                     "blue=PAE confident/no contact, red=contact/low PAE)"),
+}
+"""The caption `show_mol_view` draws above each view, verbatim from the notebook.
+
+Every one of these is a colour key rather than an explanation, and the chain
+letters in View 1's are hard-coded. R070 replaces them with real supporting
+text; this dict is where that lands."""
+
+MOLVIEWSPEC_MISSING_MESSAGE: str = (
+    "molviewspec is not installed, so the 3D views are unavailable. "
+    "Install it with `pip install molviewspec`; every other section of this "
+    "module works without it."
+)
+"""What to print when `molviewspec_available()` is `False`. The 3D section is
+optional by design -- the dependency policy keeps it out of the module's
+top-level imports -- so a caller reports this and carries on."""
+
+
+def molviewspec_available() -> bool:
+    """
+    Whether the optional `molviewspec` dependency can be imported.
+
+    The capability check a caller uses to decide whether to draw the 3D section.
+    It imports the package (and so pays for it once) but never raises.
+
+    Returns:
+        `True` if `import molviewspec` succeeds.
+
+    Example
+    -------
+    >>> isinstance(molviewspec_available(), bool)
+    True
+    """
+    try:
+        import molviewspec  # noqa: F401  (lazy by policy; see the module docstring)
+    except Exception:
+        return False
+    return True
+
+
+def _require_molviewspec() -> Any:
+    """
+    Import and return the `molviewspec` module, or raise with a usable message.
+
+    Every builder calls this on entry. The import is deliberately *inside* the
+    function: the module must stay importable, and every non-3D function must
+    stay usable, on a machine where `molviewspec` is absent.
+
+    Returns:
+        The imported `molviewspec` module.
+
+    Raises:
+        ImportError: With `MOLVIEWSPEC_MISSING_MESSAGE`.
+    """
+    try:
+        import molviewspec as mvs
+    except Exception as exc:  # pragma: no cover - exercised only without the package
+        raise ImportError(MOLVIEWSPEC_MISSING_MESSAGE) from exc
+    return mvs
+
+
+# -- structure source -------------------------------------------------------
+
+_STRUCTURE_URL_FIELDS: Tuple[Tuple[str, str], ...] = (
+    ("bcifUrl", "bcif"),
+    ("cifUrl", "mmcif"),
+)
+"""`(metadata field, MolViewSpec parse format)` in preference order. BinaryCIF
+first: it is several times smaller over the wire and Mol* parses it natively."""
+
+
+@dataclass(frozen=True)
+class StructureSource:
+    """
+    A URL for Mol* to download, together with the format it should be parsed as.
+
+    The two travel together because deriving them separately is a bug (R075).
+    The notebook picks the URL with `meta.get('bcifUrl', meta.get('cifUrl', ...))`
+    -- which falls through only on a *missing* key -- and the format with
+    `'bcif' if 'bcifUrl' in meta else 'mmcif'` -- which tests only for presence.
+    The `USE_LOCAL_FILE` path builds a metadata dict whose `bcifUrl` is present
+    and empty, so the two expressions disagree: the URL is `''` while the format
+    says `bcif`. `resolve_structure_source` makes one decision instead of two.
+
+    Attributes:
+        url:    Absolute URL Mol* downloads.
+        format: `'bcif'` or `'mmcif'`, matching `url`.
+    """
+
+    url: str
+    format: str
+
+
+def resolve_structure_source(
+    metadata: "AFDBPrediction | Mapping[str, Any]",
+    prefer_binary: bool = True,
+) -> StructureSource:
+    """
+    Resolve the structure URL and its parse format together, from one decision.
+
+    A field that is present but empty is treated as absent, which is the whole
+    point: the `USE_LOCAL_FILE` metadata dict carries `bcifUrl: ''`.
+
+    Args:
+        metadata:      An `AFDBPrediction`, or a plain metadata mapping such as
+                       the notebook's `meta` dict.
+        prefer_binary: `True` to prefer BinaryCIF over mmCIF. Set `False` only to
+                       debug against a human-readable file.
+
+    Returns:
+        A `StructureSource` whose `url` is non-empty and whose `format` matches it.
+
+    Raises:
+        ValueError: If neither field carries a usable URL, which is the offline
+            `USE_LOCAL_FILE` case. Mol* downloads the structure itself and cannot
+            be handed the already-parsed text, so the 3D section genuinely cannot
+            run and says so rather than emitting a viewer that silently shows
+            nothing.
+
+    Example
+    -------
+    >>> resolve_structure_source({'bcifUrl': 'https://x/y.bcif'})
+    StructureSource(url='https://x/y.bcif', format='bcif')
+    >>> resolve_structure_source({'bcifUrl': '', 'cifUrl': 'https://x/y.cif'})
+    StructureSource(url='https://x/y.cif', format='mmcif')
+    >>> resolve_structure_source({'bcifUrl': '', 'cifUrl': ''})
+    Traceback (most recent call last):
+        ...
+    ValueError: No usable structure URL: 'bcifUrl' and 'cifUrl' are both absent or empty.
+    """
+    fields = _STRUCTURE_URL_FIELDS if prefer_binary else tuple(reversed(_STRUCTURE_URL_FIELDS))
+
+    for field, fmt in fields:
+        if isinstance(metadata, AFDBPrediction):
+            try:
+                url = metadata.document_url(field)
+            except (KeyError, ValueError):
+                continue
+        else:
+            url = str(metadata.get(field) or "")
+        if url:
+            return StructureSource(url=url, format=fmt)
+
+    names = " and ".join(repr(field) for field, _ in _STRUCTURE_URL_FIELDS)
+    raise ValueError(f"No usable structure URL: {names} are both absent or empty.")
+
+
+# -- per-residue colouring --------------------------------------------------
+
+@dataclass(frozen=True)
+class ColourRun:
+    """
+    A contiguous stretch of residues that all take the same colour.
+
+    One `ColourRun` becomes one `ComponentExpression` with
+    `beg_label_seq_id=beg, end_label_seq_id=end`. A single residue is a run with
+    `beg == end`, which is what the notebook emitted for *every* residue.
+
+    Attributes:
+        beg:    First `label_seq_id` of the run, inclusive.
+        end:    Last `label_seq_id` of the run, inclusive.
+        colour: Hex colour applied to the whole run.
+    """
+
+    beg: int
+    end: int
+    colour: str
+
+    @property
+    def n_residues(self) -> int:
+        """Residues covered by this run."""
+        return self.end - self.beg + 1
+
+
+def colour_runs(
+    res_ids: "Sequence[int] | np.ndarray",
+    colours: Sequence[str],
+) -> List[ColourRun]:
+    """
+    Collapse a per-residue colour list into contiguous same-colour runs (R075).
+
+    A residue joins the previous run only when it is the same colour **and** its
+    `label_seq_id` is exactly one more than the previous residue's. Requiring
+    both is what makes the collapse safe: a ranged `ComponentExpression` covers
+    every residue between its endpoints, so merging across a gap in the numbering
+    would colour residues that were never in the input.
+
+    Args:
+        res_ids: `label_seq_id` per residue, ascending. Positional indices are
+                 *not* accepted; Mol* selects on the file's own numbering.
+        colours: One colour per entry of `res_ids`.
+
+    Returns:
+        The runs, in input order.
+
+    Raises:
+        ValueError: If the two sequences have different lengths.
+
+    Example
+    -------
+    >>> colour_runs([1, 2, 3], ['#FF0000', '#FF0000', '#00FF00'])
+    [ColourRun(beg=1, end=2, colour='#FF0000'), ColourRun(beg=3, end=3, colour='#00FF00')]
+    >>> colour_runs([1, 2, 5, 6], ['#FF0000'] * 4)          # 3 and 4 are absent
+    [ColourRun(beg=1, end=2, colour='#FF0000'), ColourRun(beg=5, end=6, colour='#FF0000')]
+    >>> [run.n_residues for run in colour_runs(range(1, 11), ['#FF0000'] * 10)]
+    [10]
+    """
+    ids = [int(r) for r in res_ids]
+    cols = list(colours)
+    if len(ids) != len(cols):
+        raise ValueError(
+            f"colour_runs got {len(ids)} residue ids but {len(cols)} colours; "
+            "they must be parallel."
+        )
+
+    runs: List[ColourRun] = []
+    for res_id, colour in zip(ids, cols):
+        if runs and runs[-1].colour == colour and res_id == runs[-1].end + 1:
+            runs[-1] = ColourRun(beg=runs[-1].beg, end=res_id, colour=colour)
+        else:
+            runs.append(ColourRun(beg=res_id, end=res_id, colour=colour))
+    return runs
+
+
+def _rgba_to_hex(rgba: Sequence[float]) -> str:
+    """
+    An RGBA tuple from a matplotlib colormap as an upper-case `#RRGGBB` string.
+
+    Truncating rather than rounding, and dropping alpha, reproduces the
+    notebook's own conversion exactly; `matplotlib.colors.to_hex` rounds instead
+    and so differs by one unit on some channels.
+
+    Args:
+        rgba: `(r, g, b, a)` floats in `[0, 1]`; alpha is ignored.
+
+    Returns:
+        `'#RRGGBB'`.
+
+    Example
+    -------
+    >>> _rgba_to_hex((1.0, 0.0, 0.0, 1.0))
+    '#FF0000'
+    >>> _rgba_to_hex((0.5, 0.5, 0.5, 1.0))
+    '#7F7F7F'
+    """
+    return '#{:02X}{:02X}{:02X}'.format(
+        int(rgba[0] * 255), int(rgba[1] * 255), int(rgba[2] * 255))
+
+
+def value_colours(
+    values: "Sequence[float] | np.ndarray",
+    cmap: str | Colormap = MVS_VALUE_CMAP,
+    vmin: float = 0.0,
+    vmax: float = 1.0,
+) -> List[str]:
+    """
+    Map an arbitrary per-residue value array through a colormap to hex colours.
+
+    This is the seam R072 and R074 use. Any per-residue quantity -- ipSAE
+    `d0res` today, pDockQ2's per-residue mean `ptm` next -- becomes a list of
+    colours here, and `add_residue_colours` turns that into components. Neither
+    function knows which score it is painting.
+
+    `matplotlib.cm.get_cmap`, which the notebook calls, is deprecated and slated
+    for removal; the lookup here goes through `matplotlib.colormaps` (R075).
+
+    Args:
+        values: Per-residue numbers.
+        cmap:   A `Colormap` or a registered colormap name.
+        vmin:   Value mapped to the low end of the colormap.
+        vmax:   Value mapped to the high end. Values outside `[vmin, vmax]` are
+                clipped, as a matplotlib `Normalize` would clip them.
+
+    Returns:
+        One `'#RRGGBB'` string per value.
+
+    Raises:
+        ValueError: If `vmax <= vmin`, which has no meaningful normalisation.
+
+    Example
+    -------
+    >>> value_colours([0.0, 1.0], cmap='RdYlGn')
+    ['#A50026', '#006837']
+    >>> value_colours([-3.0, 4.0], cmap='RdYlGn')          # clipped to 0 and 1
+    ['#A50026', '#006837']
+    >>> value_colours([0.0, 50.0, 100.0], cmap='RdYlGn', vmin=0.0, vmax=100.0)
+    ['#A50026', '#FEFEBD', '#006837']
+    """
+    if vmax <= vmin:
+        raise ValueError(f"value_colours needs vmax > vmin, got vmin={vmin}, vmax={vmax}.")
+    colormap = matplotlib.colormaps[cmap] if isinstance(cmap, str) else cmap
+    scaled = np.clip((np.asarray(values, dtype=float) - vmin) / (vmax - vmin), 0.0, 1.0)
+    return [_rgba_to_hex(colormap(float(value))) for value in scaled]
+
+
+def add_residue_colours(
+    structure: Any,
+    chain_id: str,
+    res_ids: "Sequence[int] | np.ndarray",
+    colours: Sequence[str],
+    representation: str = "cartoon",
+) -> List[ColourRun]:
+    """
+    Colour named residues of one chain, one component per contiguous run (R075).
+
+    The only place in this module where a residue becomes a MolViewSpec
+    component. Residues absent from `res_ids` get no component at all and so keep
+    whatever the surrounding representation gave them.
+
+    Args:
+        structure:      A MolViewSpec structure node.
+        chain_id:       `label_asym_id` of the chain being coloured.
+        res_ids:        `label_seq_id` per residue to colour, ascending.
+        colours:        One colour per entry of `res_ids`.
+        representation: `'cartoon'`, `'ball_and_stick'`, `'surface'`, ...
+
+    Returns:
+        The `ColourRun`s that were emitted, so a caller can report the component
+        count without walking the state tree.
+
+    Raises:
+        ImportError: If `molviewspec` is not installed.
+        ValueError:  If `res_ids` and `colours` differ in length.
+    """
+    mvs = _require_molviewspec()
+    runs = colour_runs(res_ids, colours)
+    for run in runs:
+        (structure
+         .component(selector=mvs.ComponentExpression(
+             label_asym_id=chain_id,
+             beg_label_seq_id=run.beg,
+             end_label_seq_id=run.end))
+         .representation(type=representation)
+         .color(color=run.colour))
+    return runs
+
+
+def _ordered_chain_ids(contacts: InterfaceContacts) -> Tuple[str, str]:
+    """The ordered pair's chain ids. The one place chain identity is resolved."""
+    return contacts.chain_x, contacts.chain_y
+
+
+def _chain_res_ids(chains: Mapping[str, ChainCoords], chain_id: str) -> np.ndarray:
+    """One chain's `label_seq_id` array, with a message naming what is available."""
+    try:
+        return chains[chain_id].res_ids
+    except KeyError:
+        raise KeyError(
+            f"Chain {chain_id!r} is not in the parsed structure; "
+            f"available: {', '.join(sorted(chains)) or '(none)'}."
+        ) from None
+
+
+def _new_structure(source: StructureSource) -> Tuple[Any, Any]:
+    """`(builder, structure)` for one view, downloading and parsing `source`."""
+    mvs = _require_molviewspec()
+    builder = mvs.create_builder()
+    structure = (
+        builder
+        .download(url=source.url)
+        .parse(format=source.format)
+        .model_structure()
+    )
+    return builder, structure
+
+
+# -- the display helper -----------------------------------------------------
+
+def show_mol_view(
+    state: Any,
+    label: str,
+    width: int = MVS_VIEW_WIDTH,
+    height: int = MVS_VIEW_HEIGHT,
+) -> None:
+    """
+    Render a MolViewSpec `State` inline, above a bold label.
+
+    The viewer HTML is inlined as a base64 `data:` URI rather than written to a
+    file and served, which is what makes it work in PyCharm and in Colab as well
+    as in classic Jupyter: none of the three agree on how a notebook-relative
+    file URL resolves, and all three render a `data:` iframe.
+
+    The only function in this section that touches `IPython`, so every builder
+    stays usable head-lessly. `IPython` is imported lazily here for the same
+    reason `molviewspec` is: the module must import outside a notebook.
+
+    Args:
+        state:  A MolViewSpec `State`, from any `build_*_view` function.
+        label:  Caption drawn above the viewer.
+        width:  Iframe width in pixels.
+        height: Iframe height in pixels.
+
+    Returns:
+        `None`. Displays as a side effect; this is the one function here that does.
+    """
+    from IPython.display import HTML, IFrame, display
+
+    html = state.molstar_html()
+    encoded = base64.b64encode(html.encode()).decode()
+    display(HTML(f'<div style="margin:10px 0 4px; font-weight:bold;">{label}</div>'))
+    display(IFrame(src=f'data:text/html;base64,{encoded}', width=width, height=height))
+
+
+# -- View 1: chain overview -------------------------------------------------
+
+def build_chain_overview_view(
+    source: StructureSource,
+    chains: Mapping[str, ChainCoords],
+    contacts: InterfaceContacts,
+    chain_colours: Optional[Mapping[str, str]] = None,
+    side_chain_colours: Optional[Mapping[str, str]] = None,
+) -> Any:
+    """
+    View 1: both chains as cartoons, with interface side chains picked out.
+
+    The orientation shot. Each chain gets its own cartoon colour, and the
+    residues that actually touch the partner chain are drawn as ball-and-stick on
+    top, so the interface is visible as a patch of sticks rather than having to
+    be inferred from the contact map.
+
+    Args:
+        source:             Structure URL and format, from `resolve_structure_source`.
+        chains:             `{chain_id: ChainCoords}`, from `parse_structure`.
+        contacts:           Interface contacts naming the ordered pair to draw.
+        chain_colours:      `{chain_id: colour}` for the cartoons. Defaults to
+                            `CHAIN_COLOURS` assigned in ordered-pair order.
+        side_chain_colours: `{chain_id: colour}` for the interface side chains.
+                            **This is the R071 seam.** Defaults to
+                            `{chain_x: COLOUR_IF}`, i.e. the first chain only,
+                            which is what the notebook draws today; R071 passes
+                            both chains with a colour each.
+
+    Returns:
+        A MolViewSpec `State`. Nothing is rendered; pass it to `show_mol_view`.
+
+    Raises:
+        ImportError: If `molviewspec` is not installed.
+        KeyError:    If a chain named by `contacts` is absent from `chains`.
+    """
+    chain_x, chain_y = _ordered_chain_ids(contacts)
+    cartoon = (dict(zip((chain_x, chain_y), CHAIN_COLOURS))
+               if chain_colours is None else dict(chain_colours))
+    side_chains = ({chain_x: COLOUR_IF}
+                   if side_chain_colours is None else dict(side_chain_colours))
+    masks = {chain_x: contacts.mask_x, chain_y: contacts.mask_y}
+
+    mvs = _require_molviewspec()
+    builder, structure = _new_structure(source)
+
+    for chain_id in (chain_x, chain_y):
+        (structure
+         .component(selector=mvs.ComponentExpression(label_asym_id=chain_id))
+         .representation(type='cartoon')
+         .color(color=cartoon[chain_id]))
+
+    for chain_id, colour in side_chains.items():
+        res_ids = _chain_res_ids(chains, chain_id)
+        selected = [int(res_ids[i]) for i in np.where(masks[chain_id])[0]]
+        add_residue_colours(structure, chain_id, selected, [colour] * len(selected),
+                            representation='ball_and_stick')
+
+    return builder.get_state()
+
+
+# -- View 2: pLDDT -----------------------------------------------------------
+
+def build_plddt_view(
+    source: StructureSource,
+    chains: Mapping[str, ChainCoords],
+    contacts: InterfaceContacts,
+    plddt: Optional[Mapping[str, np.ndarray]] = None,
+    bands: Sequence[Tuple[float, float, str, str]] = MVS_PLDDT_BANDS,
+) -> Any:
+    """
+    View 2: every residue of both chains coloured by its own pLDDT band.
+
+    The control for every other view. A low-confidence interface and a
+    high-confidence interface can produce the same contact map, and this is where
+    the difference shows.
+
+    A residue in no band gets no component and so is not drawn at all. That is
+    the notebook's behaviour and is preserved deliberately: `MVS_PLDDT_BANDS`'
+    top band is half-open at 100, so a residue at exactly 100.0 falls through
+    every band. See that constant for why this differs from `PLDDT_BANDS`.
+
+    Args:
+        source:   Structure URL and format.
+        chains:   `{chain_id: ChainCoords}`, from `parse_structure`.
+        contacts: Interface contacts naming the ordered pair to draw.
+        plddt:    `{chain_id: (n,) array}` overriding the values carried on
+                  `ChainCoords`. Pass `PLDDTScores.for_chain(...)` to colour from
+                  the pLDDT JSON document instead of the mmCIF B-factor column;
+                  the two carry the same numbers.
+        bands:    `(low, high, colour, label)` per band, tested as
+                  `low <= value < high`. The seam for a band-scheme change.
+
+    Returns:
+        A MolViewSpec `State`.
+
+    Raises:
+        ImportError: If `molviewspec` is not installed.
+        ValueError:  If a supplied pLDDT array's length does not match its chain.
+    """
+    builder, structure = _new_structure(source)
+
+    for chain_id in _ordered_chain_ids(contacts):
+        res_ids = _chain_res_ids(chains, chain_id)
+        values = np.asarray(chains[chain_id].plddt if plddt is None else plddt[chain_id],
+                            dtype=float)
+        if values.shape[0] != res_ids.shape[0]:
+            raise ValueError(
+                f"Chain {chain_id!r} has {res_ids.shape[0]} residues but "
+                f"{values.shape[0]} pLDDT values."
+            )
+
+        selected: List[int] = []
+        selected_colours: List[str] = []
+        for index, value in enumerate(values):
+            for low, high, colour, _label in bands:
+                if low <= value < high:
+                    selected.append(int(res_ids[index]))
+                    selected_colours.append(colour)
+                    break
+
+        add_residue_colours(structure, chain_id, selected, selected_colours,
+                            representation='cartoon')
+
+    return builder.get_state()
+
+
+# -- View 3: an arbitrary per-residue value on the interface -----------------
+
+def build_interface_value_view(
+    source: StructureSource,
+    chains: Mapping[str, ChainCoords],
+    contacts: InterfaceContacts,
+    values_x: "Sequence[float] | np.ndarray",
+    values_y: "Sequence[float] | np.ndarray",
+    cmap: str | Colormap = MVS_VALUE_CMAP,
+    vmin: float = 0.0,
+    vmax: float = 1.0,
+    base_colour: str = MVS_CONTEXT_COLOUR,
+    representation: str = "ball_and_stick",
+) -> Any:
+    """
+    View 3: interface residues of both chains, coloured by a per-residue value.
+
+    The whole complex is drawn as a neutral grey cartoon for context, then every
+    interface residue is drawn as ball-and-stick coloured by its own number,
+    which turns a single headline score back into a location along the chain.
+
+    **This function is the R072 / R074 seam, and is deliberately score-agnostic.**
+    Section 6's View 3 is this called with ipSAE `d0res` per-residue values
+    (`ipsae.d0res.forward.values` and `.reverse.values`); R074's two pDockQ2 views
+    are the same call with the per-residue mean `ptm` that `compute_pdockq2`
+    exposes. Nothing here knows which score it is painting, so a new view is a
+    new call, not new colouring code.
+
+    Args:
+        source:         Structure URL and format.
+        chains:         `{chain_id: ChainCoords}`, from `parse_structure`.
+        contacts:       Interface contacts naming the ordered pair; its two masks
+                        choose which residues are drawn.
+        values_x:       `(nx,)` per-residue value for `contacts.chain_x`. Only
+                        the interface entries are read.
+        values_y:       `(ny,)` per-residue value for `contacts.chain_y`.
+        cmap:           Colormap. Default `MVS_VALUE_CMAP`, red-yellow-green.
+        vmin, vmax:     Value range mapped onto the colormap; values outside are
+                        clipped. `0..1` suits any of the ptm-derived scores.
+        base_colour:    Cartoon colour for the rest of the complex.
+        representation: Representation for the coloured residues.
+
+    Returns:
+        A MolViewSpec `State`.
+
+    Raises:
+        ImportError: If `molviewspec` is not installed.
+        ValueError:  If a value array's length does not match its chain.
+    """
+    chain_x, chain_y = _ordered_chain_ids(contacts)
+    builder, structure = _new_structure(source)
+
+    (structure
+     .component()
+     .representation(type='cartoon')
+     .color(color=base_colour))
+
+    for chain_id, mask, values in ((chain_x, contacts.mask_x, values_x),
+                                   (chain_y, contacts.mask_y, values_y)):
+        res_ids = _chain_res_ids(chains, chain_id)
+        value_array = np.asarray(values, dtype=float)
+        if value_array.shape[0] != res_ids.shape[0]:
+            raise ValueError(
+                f"Chain {chain_id!r} has {res_ids.shape[0]} residues but "
+                f"{value_array.shape[0]} values."
+            )
+        indices = np.where(mask)[0]
+        add_residue_colours(
+            structure,
+            chain_id,
+            [int(res_ids[i]) for i in indices],
+            value_colours(value_array[indices], cmap=cmap, vmin=vmin, vmax=vmax),
+            representation=representation,
+        )
+
+    return builder.get_state()
+
+
+# -- View 4: PAE / contact disagreement --------------------------------------
+
+def disagreement_categories(
+    values: "Sequence[float] | np.ndarray",
+    interface_mask: np.ndarray,
+    threshold: float = MVS_DISAGREEMENT_THRESHOLD,
+) -> np.ndarray:
+    """
+    Classify each residue by whether PAE confidence and physical contact agree.
+
+    The three categories are mutually exclusive and do not cover every residue:
+    a residue that is neither confident nor in contact falls in none of them and
+    is left uncoloured, which is the notebook's behaviour.
+
+    Args:
+        values:         `(n,)` per-residue PAE-derived score, `0..1`.
+        interface_mask: `(n,)` bool, `True` where the residue touches the partner.
+        threshold:      Score above which PAE is called confident. **R073 sources
+                        this from `THRESHOLDS` instead of the notebook's magic
+                        `0.5`, which is unrelated to any published cutoff.**
+
+    Returns:
+        `(n,)` array of `MVS_DISAGREEMENT_CATEGORIES` keys, `''` where none applies.
+
+    Raises:
+        ValueError: If the two arrays have different lengths.
+
+    Example
+    -------
+    >>> import numpy as np
+    >>> mask = np.array([True, False, True, False])
+    >>> disagreement_categories([0.9, 0.9, 0.1, 0.1], mask).tolist()
+    ['agree', 'pae_only', 'contact_only', '']
+    """
+    value_array = np.asarray(values, dtype=float)
+    mask = np.asarray(interface_mask, dtype=bool)
+    if value_array.shape[0] != mask.shape[0]:
+        raise ValueError(
+            f"disagreement_categories got {value_array.shape[0]} values but "
+            f"{mask.shape[0]} mask entries."
+        )
+    confident = value_array > threshold
+    categories = np.full(value_array.shape[0], '', dtype=object)
+    categories[confident & mask] = 'agree'
+    categories[confident & ~mask] = 'pae_only'
+    categories[~confident & mask] = 'contact_only'
+    return categories
+
+
+def build_disagreement_view(
+    source: StructureSource,
+    chains: Mapping[str, ChainCoords],
+    contacts: InterfaceContacts,
+    values_x: "Sequence[float] | np.ndarray",
+    threshold: float = MVS_DISAGREEMENT_THRESHOLD,
+    categories: Sequence[Tuple[str, str, str]] = MVS_DISAGREEMENT_CATEGORIES,
+    base_colour: str = MVS_FAINT_COLOUR,
+    representation: str = "ball_and_stick",
+) -> Any:
+    """
+    View 4: where PAE confidence and physical contact disagree.
+
+    Two independent signals say whether a residue is at the interface -- a CB
+    atom within the distance cutoff, and a confident inter-chain PAE -- and this
+    view paints the residues where they differ. Agreement is the common case;
+    the disagreements are what the notebook exists to explain.
+
+    Note:
+        Only `contacts.chain_x` is coloured, which is what the notebook draws.
+        That is a defect, and it is **R073's** to fix along with the category
+        naming, the legend the notebook computed and threw away, and sourcing
+        `threshold` from `THRESHOLDS`. It is left alone here because R014 is a
+        behaviour-preserving move.
+
+    Args:
+        source:         Structure URL and format.
+        chains:         `{chain_id: ChainCoords}`, from `parse_structure`.
+        contacts:       Interface contacts naming the ordered pair.
+        values_x:       `(nx,)` per-residue score for `contacts.chain_x`,
+                        typically `ipsae.d0res.forward.values`.
+        threshold:      Confidence cutoff. The R073 seam.
+        categories:     `(key, colour, label)` per category, keys matching
+                        `disagreement_categories`. The R073 legend seam: the
+                        labels are carried here rather than discarded.
+        base_colour:    Cartoon colour for the rest of the complex.
+        representation: Representation for the coloured residues.
+
+    Returns:
+        A MolViewSpec `State`.
+
+    Raises:
+        ImportError: If `molviewspec` is not installed.
+        ValueError:  If `values_x` does not match `contacts.chain_x`'s length.
+    """
+    chain_x = contacts.chain_x
+    builder, structure = _new_structure(source)
+
+    (structure
+     .component()
+     .representation(type='cartoon')
+     .color(color=base_colour))
+
+    res_ids = _chain_res_ids(chains, chain_x)
+    value_array = np.asarray(values_x, dtype=float)
+    if value_array.shape[0] != res_ids.shape[0]:
+        raise ValueError(
+            f"Chain {chain_x!r} has {res_ids.shape[0]} residues but "
+            f"{value_array.shape[0]} values."
+        )
+
+    assigned = disagreement_categories(value_array, contacts.mask_x, threshold=threshold)
+    colour_of = {key: colour for key, colour, _label in categories}
+
+    selected: List[int] = []
+    selected_colours: List[str] = []
+    for index, key in enumerate(assigned):
+        if key in colour_of:
+            selected.append(int(res_ids[index]))
+            selected_colours.append(colour_of[key])
+
+    add_residue_colours(structure, chain_x, selected, selected_colours,
+                        representation=representation)
+
+    return builder.get_state()
