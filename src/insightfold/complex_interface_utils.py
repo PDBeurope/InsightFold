@@ -2842,7 +2842,7 @@ class ChainLabel:
     >>> isg20.short
     'ISG20 (A)'
     >>> isg20.full
-    'Chain A — Interferon-stimulated gene 20 kDa protein (Q96AZ6)'
+    'Chain A: Interferon-stimulated gene 20 kDa protein (Q96AZ6)'
 
     With nothing known it degrades to the chain id, never to an empty string:
 
@@ -2888,7 +2888,7 @@ class ChainLabel:
     def full(self) -> str:
         """
         Caption and printed-output form:
-        `'Chain A — Interferon-stimulated gene 20 kDa protein (Q96AZ6)'`.
+        `'Chain A: Interferon-stimulated gene 20 kDa protein (Q96AZ6)'`.
 
         Degrades one part at a time: without an accession the parenthesis is
         dropped, without a name the accession takes its place, and with neither
@@ -2897,11 +2897,11 @@ class ChainLabel:
         head = f"Chain {self.chain_id}"
         name = self.protein_name
         if name and self.uniprot:
-            return f"{head} — {name} ({self.uniprot})"
+            return f"{head}: {name} ({self.uniprot})"
         if name:
-            return f"{head} — {name}"
+            return f"{head}: {name}"
         if self.token:
-            return f"{head} — {self.token}"
+            return f"{head}: {self.token}"
         return head
 
     def __str__(self) -> str:
@@ -2988,8 +2988,8 @@ class ChainIdentity:
         ...      'B': ChainLabel('B', 'Small ubiquitin-related modifier 1',
         ...                      gene='Sumo1', uniprot='P63166')})
         >>> print(identity.legend())
-        Chain A — Interferon-stimulated gene 20 kDa protein (Q96AZ6), 181 residues, labelled "ISG20 (A)"
-        Chain B — Small ubiquitin-related modifier 1 (P63166), 101 residues, labelled "Sumo1 (B)"
+        Chain A: Interferon-stimulated gene 20 kDa protein (Q96AZ6), 181 residues, labelled "ISG20 (A)"
+        Chain B: Small ubiquitin-related modifier 1 (P63166), 101 residues, labelled "Sumo1 (B)"
         """
         return "\n".join(
             f"{self.labels[chain_id].full}, {self.lengths[chain_id]} residues, "
@@ -3061,7 +3061,7 @@ def verify_chain_identity(
     >>> identity.lengths
     {'A': 2, 'B': 1}
     >>> identity.short('A'), identity.full('A')
-    ('Chain A', 'Chain A — Alpha protein')
+    ('Chain A', 'Chain A: Alpha protein')
 
     With metadata, the gene becomes the short form:
 
@@ -4822,8 +4822,9 @@ _SYMMETRIC_NOTE: str = (
     "pDockQ has no second measurement to show. Swapping the chains leaves both "
     "the contact-pair count and the interface residue set unchanged, so it is "
     "symmetric by construction rather than equal by coincidence, and ipsae.py "
-    "prints it without a max (ipsae_v4.py:989). It gets a dash rather than a "
-    "zero delta, because a zero would suggest a difference had been measured."
+    "prints it without a max (ipsae_v4.py:989). It is marked symmetric with no "
+    "delta rather than given a zero, because a zero would suggest a difference "
+    "had been measured."
 )
 
 
@@ -4875,7 +4876,7 @@ def format_directional_report(
       ────────────────────────────────────────────────────────────────────────────────
       ipSAE_d0res             0.5554        ◄  0.7057       0.1503      0.7057  max        [!]
       LIS                     0.6088           0.5921       0.0167      0.6004  mean
-      pDockQ           — symmetric —    — symmetric —            —      0.1452  —
+      pDockQ               symmetric        symmetric          n/a      0.1452  n/a
     """
     resolved = resolve_direction(direction, chain_x, chain_y)
     name_x = _chain_label(chain_x, label_x)
@@ -4889,7 +4890,7 @@ def format_directional_report(
     out.append(title + "─" * max(rule - len(title), 3))
     out.append("")
     out.extend(textwrap.wrap(
-        "PAE is asymmetric — PAE[i, j] is not PAE[j, i] — so every inter-chain "
+        "PAE is asymmetric (PAE[i, j] is not PAE[j, i]), so every inter-chain "
         "score is measured twice, once from each chain's frame of reference. "
         "The two are different measurements, not one measurement seen twice, "
         "and the reported score is a combination of them rather than either one "
@@ -4907,9 +4908,9 @@ def format_directional_report(
     for row in rows:
         display = SCORE_DISPLAY_NAMES.get(row.name, row.name)
         if not row.directional:
-            sym = "— symmetric —"
+            sym = "symmetric"
             out.append(f"  {display:<15s}{sym:>{col + 2}s}  {sym:>{col + 2}s}"
-                       f"{'—':>13s}{row.score:>12.4f}  —")
+                       f"{'n/a':>13s}{row.score:>12.4f}  n/a")
             continue
         n_directional += 1
         # `max` has a winning direction; `mean` does not -- both feed the value
@@ -4962,7 +4963,7 @@ def format_directional_report(
             f"than {tolerance:.2f}, so on this complex the reported values do "
             f"not depend on which chain is read as the frame of reference. That "
             f"is the expected result when the two chains are copies of one "
-            f"protein — but it is measured here, not assumed, and the two "
+            f"protein, but it is measured here, not assumed, and the two "
             f"columns above are where it can be checked.", width))
 
     out.append("")
@@ -4980,7 +4981,7 @@ def format_directional_report(
             f"Inspecting: "
             f"{describe_direction(resolved, chain_x, chain_y, label_x, label_y)}"
             f" (DIRECTION = {resolved!r}), marked » above. A viewing choice "
-            f"only — the Reported column is unchanged and nothing was "
+            f"only: the Reported column is unchanged and nothing was "
             f"recomputed. Set DIRECTION = None to go back to both.", width))
 
     return "\n".join(line.rstrip() for line in out)
@@ -6268,7 +6269,7 @@ def format_summary_table_html(
         '</span><br>'
         '<span style="color:#555;font-size:0.88em;">'
         f'ipSAE_d0res &ge; {AFDB_IPSAE_D0RES_MIN:.2f} AND pDockQ2 &ge; '
-        f'{AFDB_PDOCKQ2_MIN:.2f} &nbsp;&mdash;&nbsp; {esc(summary.afdb.reason)}'
+        f'{AFDB_PDOCKQ2_MIN:.2f}: {esc(summary.afdb.reason)}'
         '</span></div>'
     )
     footer = (
@@ -7169,7 +7170,7 @@ def plot_pae_matrix(
 
     im = ax.imshow(pae.matrix, aspect='equal', origin='upper',
                    cmap=resolve_pae_cmap(cmap), vmin=0, vmax=pae.max_pae)
-    fig.colorbar(im, ax=ax, label='PAE (Å) — lower = more confident',
+    fig.colorbar(im, ax=ax, label='PAE (Å): lower = more confident',
                  fraction=0.046, pad=0.03)
 
     # One dashed line per internal chain boundary. Two chains give the notebook's
@@ -7207,7 +7208,7 @@ def plot_pae_matrix(
         ax.set_xlabel('Residue index (' + ', then '.join(name[c] for c in ids) + ')',
                       fontsize=10)
     ax.set_ylabel('Residue index', fontsize=10)
-    head = f'Full PAE Matrix — {accession}' if accession else 'Full PAE Matrix'
+    head = f'Full PAE Matrix: {accession}' if accession else 'Full PAE Matrix'
     ax.set_title(f'{head}\n'
                  f'(dashed line = chain boundary between {name_x} and {name_y})',
                  fontsize=11)
@@ -7354,9 +7355,9 @@ def plot_pae_score_masks(
         f'All four panels below show the SAME block: the inter-chain '
         f'quadrant {name_x} → {name_y}, rows = {name_x} ({n_rows} residues), '
         f'columns = {name_y} ({n_cols} residues). It is '
-        f'pae_matrix[:{n_rows}, {n_rows}:{n_rows + n_cols}] — the '
+        f'pae_matrix[:{n_rows}, {n_rows}:{n_rows + n_cols}] (the '
         f'upper-right block of the full PAE matrix in the previous figure, '
-        f'shaded at left — and not the whole matrix. The panels differ only '
+        f'shaded at left) and not the whole matrix. The panels differ only '
         f'in which of its {n_cells_total:,} cells each score reads; hatched '
         f'slate = cells that score ignores.',
         width=max(38, text_width))
@@ -7432,7 +7433,7 @@ def plot_pae_score_masks(
 
     # One colour bar across every panel, so all four give up the same width.
     bar = grid.colorbar(im, cax=cax)
-    bar.set_label('PAE (Å) — lower = more confident', fontsize=9)
+    bar.set_label('PAE (Å): lower = more confident', fontsize=9)
     bar.ax.tick_params(labelsize=8)
     fig.suptitle(textwrap.fill(f'{name_x} → {name_y} inter-chain PAE block: '
                                'cells used by each score',
@@ -7694,7 +7695,7 @@ def plot_residue_score_profiles(
         ax.set_xlim(-0.5, n_res - 0.5)
         ax.set_xlabel(f'Residue index along {row_label}')
         ax.set_ylabel('Per-residue score (0–1)')
-        ax.set_title(f'Per-Residue Score Profiles — {row_label} → {col_label}')
+        ax.set_title(f'Per-Residue Score Profiles: {row_label} → {col_label}')
         ax.legend(loc='upper left', fontsize=9, ncol=2)
 
     fig.tight_layout()
@@ -7779,7 +7780,7 @@ def plot_plddt_distribution(
     ax2.axvline(nx - 0.5, color='black', linewidth=1.5, linestyle='--',
                 label=f'{name_x} | {name_y} boundary')
     ax2.axhline(70, color='grey', linestyle=':', linewidth=1)
-    ax2.set_xlabel(f'Residue index — {name_x}, then {name_y}')
+    ax2.set_xlabel(f'Residue index ({name_x}, then {name_y})')
     ax2.set_ylabel('pLDDT')
     ax2.set_title('Per-residue pLDDT profile (AlphaFold colour scheme)')
 

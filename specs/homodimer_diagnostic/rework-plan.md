@@ -1023,7 +1023,7 @@ orientation shot. Depends on R014 and R071 (both-chains side-chain colouring).
 
 ## W4 — Prose pass
 
-### `[ ] R040 — Em dash sweep`
+### `[x] R040 — Em dash sweep` — DONE 2026-09-08
 
 > User note: *"Read over all the markdown text, making sure the em dashes disappear, unless
 > you want them there explicitly."*
@@ -1625,6 +1625,36 @@ in `format_summary_table_html` are now escaped.
 
 299 doctests. Six fixtures execute clean. Scores numerically identical.
 
+
+**R040 outcome, 2026-09-08. Milestone M7 complete.**
+
+**80 em dashes in user-facing text, now 0, with zero deliberate keeps.** Replacements were
+varied by what each sentence needed rather than substituted uniformly: colons where the clause
+explains or enumerates, commas for parentheticals, parentheses for genuine asides, full stops
+where two independent thoughts were being joined, and words where the glyph was doing a word's
+job (`"— symmetric —"` -> `"symmetric"`, table `"—"` -> `"n/a"`).
+
+**A `&mdash;` HTML entity that no Unicode grep would find.** The AFDB verdict banner in
+`format_summary_table_html` carried `&nbsp;&mdash;&nbsp;`. It surfaced only by diffing rendered
+HTML before against after. `&#8212;` and `&#x2014;` were also checked: none.
+
+**Fixed-width alignment preserved.** The pDockQ row of the directional table had
+`— symmetric —` inside `f"{sym:>{col+2}s}"` fields. Machine-checked: the `Reported` column ends
+at character 74 before and after, and the row is now the same length as its neighbours rather
+than two characters short.
+
+**Numeric identity proven properly:** every stream, execute_result and HTML output captured for
+all six fixtures before and after, MolViewSpec base64 blobs stripped (they embed a wall-clock
+timestamp), then every numeric token compared in order. 483 to 507 tokens per fixture, all
+identical.
+
+**Follow-up the agent flagged and the orchestrator then did.** Five bullets in the intro used an
+**en** dash as a prose dash (`- **LIS** – Density of…`), which A2's scope left alone because
+they are not em dashes but which read identically to a user. Converted to colons; the 26
+genuine numeric-range en dashes (`70–90`, `pp. 5–6`, `CB–CB`) are untouched. That edit initially
+dropped the trailing newlines and ran the bullets together, caught by re-reading the rendered
+cell and repaired.
+
 ## Milestones and execution order
 
 46 tasks in 8 milestones. Execution model, agreed with the user 2026-09-07: each task goes to
@@ -1640,7 +1670,7 @@ review.
 | M4 | Scoring correctness + Section 4 | R003-R008, R060-R062 | 9 | **COMPLETE** 2026-09-08 |
 | M5 | PAE visuals | R050-R052 | 3 | **COMPLETE** 2026-09-08 |
 | M6 | 3D views | R070-R075, R030 | 7 | **COMPLETE** 2026-09-08 |
-| M7 | Summary + prose | R080-R082, R002b, R004, R040 | 6 | R080, R081, R082, R002b, R004 done; **R040 remains** |
+| M7 | Summary + prose | R080-R082, R002b, R004, R040 | 6 | **COMPLETE** 2026-09-08 |
 | M8 | Validation, docs, cleanup | R090-R095 | 6 | |
 
 Rationale for the ordering. M1 first because every number downstream depends on it, and it
