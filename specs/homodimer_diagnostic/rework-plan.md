@@ -676,10 +676,23 @@ both dissolved once truncation was accounted for:
 | LIS_AB | 0.756447 | **0.75** | 0.76 | **0.75** |
 | pDockQ | 0.691274 | 0.69 | 0.69 | 0.69 |
 
-pDockQ2 and LIS distinguish the two conventions, and both say truncate. **R092 must compare
-against the full-precision per-direction fields where they exist, and must truncate rather
-than round when only 2dp is stored** — otherwise it will report false failures on exactly the
-entries that are stored coarsely.
+pDockQ2 and LIS distinguish the two conventions, and both say truncate.
+
+**CORRECTED 2026-09-08 by R092, which found this rule over-generalised.** There are **two
+regimes**, and the rounding behaviour differs between them:
+
+| Regime | Entries | Per-direction fields | Rolled-up 2dp fields |
+|--------|---------|----------------------|----------------------|
+| TWO-DP | FX-001, FX-002 (both homodimers) | stored at 2dp, **truncated** | truncated |
+| FULL | FX-006 to FX-010 | full precision | **rounded** |
+
+Verified independently: FX-002 `pDockQ` 0.687671 -> AFDB 0.68 is decisive for truncation
+(rounding gives 0.69, and pDockQ has no per-direction field to fall back on). FX-006 `ipSAE`
+0.705718 -> AFDB 0.71 is decisive for rounding (truncation gives 0.70). Applying the original
+blanket rule uniformly produces **11 false failures**.
+
+**Correct method:** use the full-precision per-direction fields wherever they exist; fall back
+to a 2dp field only when the entry has nothing better, and then truncate.
 
 ## W2 — Heterodimer support
 
@@ -1507,13 +1520,13 @@ could not verify the range it had been handed.
 
 ## W9 — Validation and documentation
 
-### `[ ] R090 — Homodimer end-to-end run`
+### `[x] R090 — Homodimer end-to-end run` — DONE 2026-09-08
 Fixture FX-001 `AF-0000000065889468`. Full run, clean, no warnings.
 
-### `[ ] R091 — Heterodimer end-to-end run`
+### `[x] R091 — Heterodimer end-to-end run` — DONE 2026-09-08
 Fixture `AF-0000000211034637` (R024). Full run, every section correct for unequal chains.
 
-### `[ ] R092 — Numerical agreement with ipsae.py`
+### `[x] R092 — Numerical agreement with ipsae.py` — DONE 2026-09-08
 All seven values within ±0.001 of `ipsae.py` v4 on both fixtures. Record in
 `specs/homodimer_diagnostic/validation-report.md`, which T038 in the original `tasks.md`
 already calls for and which does not yet exist.
@@ -1655,6 +1668,41 @@ genuine numeric-range en dashes (`70–90`, `pp. 5–6`, `CB–CB`) are untouche
 dropped the trailing newlines and ran the bullets together, caught by re-reading the rendered
 cell and repaired.
 
+
+**M8a outcome, 2026-09-08 (R090 + R091 + R092). Delivered
+`specs/homodimer_diagnostic/validation-report.md`, 820 lines: the report the original spec
+pack's T038 called for and never got.**
+
+**13 runs across all ten registered fixtures. Zero errors, zero bytes to stderr on every
+successful run.** Seven scoring fixtures at 3.9-5.3 s each, six figures and six Mol* views
+apiece. Both negative fixtures halt cleanly at the intended gate. Local-file mode with all
+three documents reproduces the online scores bit-identically; with documents missing it names
+every missing file.
+
+**231 numerical comparisons against two independent references, zero outside tolerance.**
+vs `ipsae.py` v4 as a subprocess: worst |delta| **4.7e-5**, every delta above 1e-6 falling on
+the three values the reference prints at 4dp; the 6dp ones agree to <= 6e-7. vs AFDB production
+values: worst |delta| **2.4e-6** on full-precision fields, exact on 2dp, and `n0dom` matching
+integer-for-integer per direction on all five heterodimers.
+
+**Three findings for later tasks.**
+1. The R060 methodology note was over-generalised; corrected above.
+2. **`complexPredictionAccuracy_ipTM` is AlphaFold's own ipTM, not our `ipTM_d0chn`.** It
+   tracks `_iptm_af` and is up to 0.054 away on FX-010. Substituting it produces a false
+   failure on 6 of 7 fixtures. Nothing in the spec pack warns about this: R093 must record it.
+3. **FX-002 is not borderline** at `ipSAE_d0res` 0.7699 (CONFIDENT); FX-008 (0.6366) holds that
+   role. R094 should correct the manifest.
+
+**Two manifest items closed:** the R080 self-contradiction no longer reproduces, and `pDockQ`
+is reconciled beyond 2dp (<= 3.3e-5 on all seven), closing the last numerical gap.
+
+**No bug found** in the notebook, module or `interface.py`.
+
+**Principal outstanding risk: Colab is entirely unverified.** Every run had `IN_COLAB = False`,
+so the clone, stale-clone-refresh and `pip install molviewspec` paths never executed and the
+60 s budget is unmeasured. The bootstrap's `TODO(merge)` still pins the feature branch, so a
+Colab test today would not predict post-merge behaviour anyway.
+
 ## Milestones and execution order
 
 46 tasks in 8 milestones. Execution model, agreed with the user 2026-09-07: each task goes to
@@ -1671,7 +1719,7 @@ review.
 | M5 | PAE visuals | R050-R052 | 3 | **COMPLETE** 2026-09-08 |
 | M6 | 3D views | R070-R075, R030 | 7 | **COMPLETE** 2026-09-08 |
 | M7 | Summary + prose | R080-R082, R002b, R004, R040 | 6 | **COMPLETE** 2026-09-08 |
-| M8 | Validation, docs, cleanup | R090-R095 | 6 | |
+| M8 | Validation, docs, cleanup | R090-R095 | 6 | R090, R091, R092 done |
 
 Rationale for the ordering. M1 first because every number downstream depends on it, and it
 touches no code so it is cheap to redo. M2 before any behavioural change, so later edits land
