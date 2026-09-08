@@ -197,6 +197,11 @@ __all__ = [
     "DIRECTIONAL_DELTA_TOLERANCE",
     "DirectionalDelta",
     "directional_deltas",
+    "DIRECTION_FORWARD",
+    "DIRECTION_REVERSE",
+    "resolve_direction",
+    "describe_direction",
+    "format_directional_report",
     # thresholds
     "Provenance",
     "Band",
@@ -230,6 +235,8 @@ __all__ = [
     "COLOUR_NON_IF_HIST",
     "CHAIN_COLOURS",
     "SCORE_PROFILE_COLOURS",
+    "PROFILE_SERIES",
+    "PEAK_MARKER_COLOUR",
     "PLDDT_BANDS",
     "PLDDT_BAND_COLOURS",
     "plddt_band_colour",
@@ -4638,6 +4645,362 @@ def directional_deltas(
     return rows
 
 
+# --- direction selection and the printed report (R008) ----------------------
+# The user asked for "A to B by default, with a parameter to view B to A".
+# Taken literally for the *reported* score that would break D2: `ipsae.py` does
+# not report x -> y, it reports `max(x -> y, y -> x)` for ipTM_d0chn, the three
+# ipSAE variants and pDockQ2, and the `mean` for LIS. On the heterodimer fixture
+# ipSAE_d0res is 0.5555 one way and 0.7057 the other, so quoting the forward
+# direction would miss AFDB's own published value by 0.15 -- 150x the +/-0.001
+# tolerance.
+#
+# So `direction` is a **viewing** control. It selects which direction is
+# highlighted in the report and which panel `plot_residue_score_profiles` draws.
+# It never reaches a `compute_*` function and never changes a reported number,
+# and the report says so on screen rather than only here.
+
+DIRECTION_FORWARD: str = _DIRECTION_FORWARD
+"""The `x -> y` direction: rows of `block_xy`, i.e. residues of the first chain."""
+
+DIRECTION_REVERSE: str = _DIRECTION_REVERSE
+"""The `y -> x` direction: rows of `block_yx`, i.e. residues of the second chain."""
+
+_DIRECTION_ALIASES: Dict[str, str] = {
+    "xy": _DIRECTION_FORWARD,
+    "yx": _DIRECTION_REVERSE,
+    "ab": _DIRECTION_FORWARD,
+    "ba": _DIRECTION_REVERSE,
+    "forward": _DIRECTION_FORWARD,
+    "reverse": _DIRECTION_REVERSE,
+}
+"""Accepted spellings of a viewing direction, lower-cased, whitespace- and
+arrow-stripped.
+
+`'ab'` / `'ba'` are **positional**, not chain letters: they mean "first chain of
+the ordered pair to second" and the reverse, so they stay correct for a pair
+whose ids are not `A` and `B`. The real chain ids are accepted too when they are
+handed to `resolve_direction`.
+"""
+
+
+def resolve_direction(
+    direction: Optional[str],
+    chain_x: Optional[str] = None,
+    chain_y: Optional[str] = None,
+) -> Optional[str]:
+    """
+    Normalise a user-supplied viewing direction to `'xy'`, `'yx'` or `None`.
+
+    `None` means "no direction selected": show the combination `ipsae.py`
+    reports, which is what every default in this module does.
+
+    Args:
+        direction: `None`, or any spelling in `_DIRECTION_ALIASES`, or the two
+                   chain ids in either order (`'AB'`, `'B->A'`, `'B → A'`).
+        chain_x:   First chain of the ordered pair, if the ids should be accepted.
+        chain_y:   Second chain of the ordered pair.
+
+    Returns:
+        `'xy'`, `'yx'`, or `None`.
+
+    Raises:
+        ValueError: On anything else. A typo must fail loudly: silently falling
+            back to a direction would mean the reader is told they are looking at
+            one measurement while shown the other.
+
+    Example
+    -------
+    >>> resolve_direction(None) is None
+    True
+    >>> resolve_direction('BA', 'A', 'B'), resolve_direction('reverse')
+    ('yx', 'yx')
+    >>> resolve_direction('C -> A', 'C', 'A')
+    'xy'
+    >>> resolve_direction('sideways')
+    Traceback (most recent call last):
+        ...
+    ValueError: Unknown direction 'sideways'. Use None for the reported combination, 'xy' for first -> second, or 'yx' for second -> first.
+    """
+    if direction is None:
+        return None
+    token = str(direction).strip().lower()
+    for junk in (" ", "\t", "→", "-", ">", "<", "_"):
+        token = token.replace(junk, "")
+    if chain_x and chain_y:
+        low_x, low_y = str(chain_x).strip().lower(), str(chain_y).strip().lower()
+        if token == low_x + low_y:
+            return _DIRECTION_FORWARD
+        if token == low_y + low_x:
+            return _DIRECTION_REVERSE
+    if token in _DIRECTION_ALIASES:
+        return _DIRECTION_ALIASES[token]
+    raise ValueError(
+        f"Unknown direction {direction!r}. Use None for the reported "
+        f"combination, 'xy' for first -> second, or 'yx' for second -> first."
+    )
+
+
+def describe_direction(
+    direction: Optional[str],
+    chain_x: str,
+    chain_y: str,
+    label_x: "Optional[str | ChainLabel]" = None,
+    label_y: "Optional[str | ChainLabel]" = None,
+) -> str:
+    """
+    Human-readable name of a viewing direction, e.g. `'ISG20 (A) → CALM1 (B)'`.
+
+    Args:
+        direction: `'xy'`, `'yx'`, or `None` for the reported combination.
+        chain_x:   First chain of the ordered pair.
+        chain_y:   Second chain of the ordered pair.
+        label_x:   Display name for `chain_x`.
+        label_y:   Display name for `chain_y`.
+
+    Returns:
+        The arrow form, or a description of the default when `direction` is
+        `None`.
+
+    Example
+    -------
+    >>> describe_direction('xy', 'A', 'B', 'ISG20 (A)', 'CALM1 (B)')
+    'ISG20 (A) → CALM1 (B)'
+    >>> describe_direction('yx', 'A', 'B')
+    'Chain B → Chain A'
+    >>> describe_direction(None, 'A', 'B')
+    'both directions, combined as ipsae.py reports'
+    """
+    resolved = resolve_direction(direction, chain_x, chain_y)
+    name_x = _chain_label(chain_x, label_x)
+    name_y = _chain_label(chain_y, label_y)
+    if resolved is None:
+        return "both directions, combined as ipsae.py reports"
+    if resolved == _DIRECTION_FORWARD:
+        return f"{name_x} → {name_y}"
+    return f"{name_y} → {name_x}"
+
+
+_SYMMETRIC_NOTE: str = (
+    "pDockQ has no second measurement to show. Swapping the chains leaves both "
+    "the contact-pair count and the interface residue set unchanged, so it is "
+    "symmetric by construction rather than equal by coincidence, and ipsae.py "
+    "prints it without a max (ipsae_v4.py:989). It gets a dash rather than a "
+    "zero delta, because a zero would suggest a difference had been measured."
+)
+
+
+def format_directional_report(
+    rows: Sequence[DirectionalDelta],
+    chain_x: str,
+    chain_y: str,
+    label_x: "Optional[str | ChainLabel]" = None,
+    label_y: "Optional[str | ChainLabel]" = None,
+    direction: Optional[str] = None,
+    width: int = 78,
+) -> str:
+    """
+    The directional breakdown as printed text: both directions, the gap, the
+    reported value, and which direction supplied it (R008).
+
+    The headline number is never displaced. Every row still carries the value
+    `ipsae.py` reports, in its own column, and the two directional columns sit
+    beside it as the evidence behind it. `direction` changes only which column is
+    marked for inspection; no score is recomputed and none can change.
+
+    Args:
+        rows:      From `directional_deltas`.
+        chain_x:   First chain of the ordered pair.
+        chain_y:   Second chain of the ordered pair.
+        label_x:   Display name for `chain_x`.
+        label_y:   Display name for `chain_y`.
+        direction: Viewing direction, per `resolve_direction`. `None` shows the
+                   reported combination and marks only the winning direction.
+        width:     Wrap width for the prose paragraphs.
+
+    Returns:
+        A block of text with no trailing newline, ready to `print`.
+
+    Example
+    -------
+    The two directional columns flank the reported value rather than replacing
+    it, `◄` marks the direction the reported value came from, and a symmetric
+    score is labelled instead of diffed:
+
+    >>> rows = [DirectionalDelta('ipsae_d0res', True, 'max', 0.705718,
+    ...                          0.555450, 0.705718),
+    ...         DirectionalDelta('lis', True, 'mean', 0.600423, 0.608776, 0.592070),
+    ...         DirectionalDelta('pdockq', False, 'symmetric', 0.145200)]
+    >>> report = format_directional_report(rows, 'A', 'B', 'ISG20 (A)', 'CALM1 (B)')
+    >>> print('\\n'.join(report.splitlines()[9:15]))
+      Score              ISG20 (A) →      CALM1 (B) →          |Δ|    Reported  Combined
+                           CALM1 (B)        ISG20 (A)
+      ────────────────────────────────────────────────────────────────────────────────
+      ipSAE_d0res             0.5554        ◄  0.7057       0.1503      0.7057  max        [!]
+      LIS                     0.6088           0.5921       0.0167      0.6004  mean
+      pDockQ           — symmetric —    — symmetric —            —      0.1452  —
+    """
+    resolved = resolve_direction(direction, chain_x, chain_y)
+    name_x = _chain_label(chain_x, label_x)
+    name_y = _chain_label(chain_y, label_y)
+    head_xy, head_yx = f"{name_x} →", f"{name_y} →"
+    col = max(len(head_xy), len(head_yx), len(name_x), len(name_y), 13)
+    rule = 2 + 15 + 2 * (col + 2) + 13 + 12 + 10
+
+    out: List[str] = []
+    title = "── Directional Breakdown "
+    out.append(title + "─" * max(rule - len(title), 3))
+    out.append("")
+    out.extend(textwrap.wrap(
+        "PAE is asymmetric — PAE[i, j] is not PAE[j, i] — so every inter-chain "
+        "score is measured twice, once from each chain's frame of reference. "
+        "The two are different measurements, not one measurement seen twice, "
+        "and the reported score is a combination of them rather than either one "
+        "of them. Both are shown here so that a reader can never mistake the "
+        "reported number for a property of the complex when it is a property of "
+        "one direction.", width))
+    out.append("")
+    out.append(f"  {'Score':<15s}{head_xy:>{col + 2}s}  {head_yx:>{col + 2}s}"
+               f"{'|Δ|':>13s}{'Reported':>12s}  Combined")
+    out.append(f"  {'':<15s}{name_y:>{col + 2}s}  {name_x:>{col + 2}s}")
+    out.append("  " + "─" * (rule - 2))
+
+    flagged: List[DirectionalDelta] = []
+    n_directional = 0
+    for row in rows:
+        display = SCORE_DISPLAY_NAMES.get(row.name, row.name)
+        if not row.directional:
+            sym = "— symmetric —"
+            out.append(f"  {display:<15s}{sym:>{col + 2}s}  {sym:>{col + 2}s}"
+                       f"{'—':>13s}{row.score:>12.4f}  —")
+            continue
+        n_directional += 1
+        # `max` has a winning direction; `mean` does not -- both feed the value
+        # equally, so marking one would misdescribe how LIS is combined.
+        winner = None
+        if row.combine == "max":
+            winner = (_DIRECTION_FORWARD if row.forward >= row.reverse
+                      else _DIRECTION_REVERSE)
+        cell_xy = _direction_cell(row.forward, winner == _DIRECTION_FORWARD,
+                                  resolved == _DIRECTION_FORWARD)
+        cell_yx = _direction_cell(row.reverse, winner == _DIRECTION_REVERSE,
+                                  resolved == _DIRECTION_REVERSE)
+        flag = "  [!]" if row.flagged else ""
+        out.append(
+            f"  {display:<15s}{cell_xy:>{col + 2}s}  {cell_yx:>{col + 2}s}"
+            f"{row.delta:>13.4f}{row.score:>12.4f}  {row.combine:<9s}{flag}"
+        )
+        if row.flagged:
+            flagged.append(row)
+
+    tolerance = rows[0].tolerance if rows else DIRECTIONAL_DELTA_TOLERANCE
+    out.append("")
+    out.append("  ◄  the direction the reported value came from")
+    if resolved is not None:
+        out.append("  »  the direction selected for inspection (DIRECTION)")
+    out.append(f"  [!] the two directions differ by more than {tolerance:.4f}")
+    out.append("")
+    out.extend(textwrap.wrap(_SYMMETRIC_NOTE, width,
+                             initial_indent="  ", subsequent_indent="  "))
+    out.append("")
+
+    if flagged:
+        verb = "differs" if len(flagged) == 1 else "differ"
+        out.extend(textwrap.wrap(
+            f"{len(flagged)} of the {n_directional} directional scores {verb} "
+            f"between the two directions by more than {tolerance:.2f}. For "
+            f"that score the reported number is a statement about one chain's "
+            f"view of the other, not about the complex as a whole:"
+            if len(flagged) == 1 else
+            f"{len(flagged)} of the {n_directional} directional scores {verb} "
+            f"between the two directions by more than {tolerance:.2f}. For "
+            f"those the reported number is a statement about one chain's view "
+            f"of the other, not about the complex as a whole:", width))
+        for row in flagged:
+            out.append("")
+            out.extend(_flag_sentence(row, name_x, name_y, width))
+    else:
+        out.extend(textwrap.wrap(
+            f"No directional score differs between the two directions by more "
+            f"than {tolerance:.2f}, so on this complex the reported values do "
+            f"not depend on which chain is read as the frame of reference. That "
+            f"is the expected result when the two chains are copies of one "
+            f"protein — but it is measured here, not assumed, and the two "
+            f"columns above are where it can be checked.", width))
+
+    out.append("")
+    if resolved is None:
+        out.extend(textwrap.wrap(
+            "Inspecting: both directions (DIRECTION = None, the default). Set "
+            "DIRECTION to 'xy' or 'yx' in Section 1 to mark one direction here "
+            "and draw only that chain's panel in the per-residue profile figure "
+            "below. That is a viewing choice: the Reported column, the summary "
+            "table and every traffic light are unaffected by it, because "
+            "ipsae.py's combination of the two directions is the definition of "
+            "the score.", width))
+    else:
+        out.extend(textwrap.wrap(
+            f"Inspecting: "
+            f"{describe_direction(resolved, chain_x, chain_y, label_x, label_y)}"
+            f" (DIRECTION = {resolved!r}), marked » above. A viewing choice "
+            f"only — the Reported column is unchanged and nothing was "
+            f"recomputed. Set DIRECTION = None to go back to both.", width))
+
+    return "\n".join(line.rstrip() for line in out)
+
+
+def _direction_cell(value: float, is_winner: bool, is_inspected: bool) -> str:
+    """One directional value plus its two fixed-width marker slots.
+
+    Example
+    -------
+    >>> _direction_cell(0.7057, True, False)
+    '◄  0.7057'
+    >>> _direction_cell(0.5555, False, True)
+    ' » 0.5555'
+    >>> _direction_cell(0.5555, True, True)
+    '◄» 0.5555'
+    """
+    return f"{'◄' if is_winner else ' '}{'»' if is_inspected else ' '} {value:.4f}"
+
+
+def _flag_sentence(
+    row: DirectionalDelta,
+    name_x: str,
+    name_y: str,
+    width: int = 78,
+) -> List[str]:
+    """Wrapped prose for one flagged score: which direction won, and what it means."""
+    display = SCORE_DISPLAY_NAMES.get(row.name, row.name)
+    forward_wins = row.forward >= row.reverse
+    high_dir = f"{name_x} → {name_y}" if forward_wins else f"{name_y} → {name_x}"
+    low_dir = f"{name_y} → {name_x}" if forward_wins else f"{name_x} → {name_y}"
+    low = min(row.forward, row.reverse)
+    high = max(row.forward, row.reverse)
+
+    if row.combine == "mean":
+        lead = (f"* {display} is reported as {row.score:.4f}, the mean of "
+                f"{row.forward:.4f} ({name_x} → {name_y}) and {row.reverse:.4f} "
+                f"({name_y} → {name_x}). Neither direction is the score; the "
+                f"reported value is one no single measurement produced.")
+    else:
+        lead = (f"* {display} is reported as {row.score:.4f}, which is the "
+                f"{high_dir} measurement. Read {low_dir} the same score is "
+                f"{low:.4f}, {row.delta:.4f} lower. The reported value says how "
+                f"confidently the model places the first-named chain's residues "
+                f"against the second; asked the other way round it is less sure, "
+                f"and the max keeps the more optimistic of the two answers.")
+    try:
+        band_hi = traffic_light(high, row.name)[1]
+        band_lo = traffic_light(low, row.name)[1]
+        if band_hi != band_lo:
+            lead += (f" The gap crosses a band edge: {band_hi} one way, "
+                     f"{band_lo} the other.")
+    except KeyError:  # pragma: no cover - only for a name outside THRESHOLDS
+        pass
+    return textwrap.wrap(lead, width, initial_indent="  ",
+                         subsequent_indent="    ")
+
+
 # ---------------------------------------------------------------------------
 # Thresholds
 # ---------------------------------------------------------------------------
@@ -5922,6 +6285,127 @@ def plot_pae_score_masks(
     return fig
 
 
+PROFILE_SERIES: Tuple[str, ...] = (
+    "iptm_d0chn",
+    "ipsae_d0res",
+    "ipsae_d0chn",
+    "ipsae_d0dom",
+)
+"""The four values that have a genuine per-residue decomposition (R062).
+
+Each of these is defined residue by residue -- row `i` of a PAE block is
+residue `i`'s own measurement against the whole partner chain -- and the value
+`ipsae.py` reports for the direction is `values.max()`, i.e. literally one
+residue's number. That is what makes a profile meaningful and an argmax marker
+worth drawing.
+
+The other three scores are **not** omitted by oversight:
+
+- `pdockq` pools over the interface residue set (one mean pLDDT, one contact
+  count) and has no per-residue term at all.
+- `lis` pools over every sub-cutoff inter-chain *pair* in the block; a pair is
+  not a residue, and nothing in the formula is indexed by row.
+- `pdockq2` pools over contact *pairs* too. `PDockQ2Direction.mean_ptm_by_residue`
+  does give a per-residue projection of one of its two ingredients, but the
+  reported pDockQ2 is a sigmoid of `mean_plddt * mean_ptm` over all pairs, not
+  the max over that array, so plotting it here would put a series on an
+  argmax-annotated figure whose argmax means nothing. It belongs on the
+  structure instead, where the contact set it lives on is visible (R074).
+"""
+
+_PROFILE_STYLE: Dict[str, Dict[str, Any]] = {
+    "iptm_d0chn": {"linewidth": 1.5, "linestyle": "-"},
+    "ipsae_d0res": {"linewidth": 1.5, "linestyle": "-"},
+    "ipsae_d0chn": {"linewidth": 1.2, "linestyle": "--"},
+    "ipsae_d0dom": {"linewidth": 1.2, "linestyle": ":"},
+}
+
+PEAK_MARKER_COLOUR: str = "#37474F"
+"""Slate. The legend proxy for the peak-residue star; the stars themselves take
+their series colour."""
+
+
+def _residue_name(index: int, res_ids: Optional[np.ndarray]) -> str:
+    """`'res 137'` when residue numbering is known, `'index 136'` when it is not.
+
+    Example
+    -------
+    >>> _residue_name(2, np.array([11, 12, 13]))
+    'res 13'
+    >>> _residue_name(2, None)
+    'index 2'
+    """
+    if res_ids is None:
+        return f"index {index}"
+    return f"res {int(res_ids[index])}"
+
+
+def _annotate_peaks(
+    ax: Any,
+    profiles: Mapping[str, ResidueProfile],
+    n_res: int,
+    res_ids: Optional[np.ndarray],
+) -> None:
+    """
+    Mark each series' argmax residue and label it with residue number and value.
+
+    The reported score of a direction *is* the argmax residue's value, so this is
+    the single most consequential point on the panel and it was previously
+    invisible (R062). Series peaking on the same residue -- the usual case, since
+    the three ipSAE variants differ only in `d0` -- share one label box rather
+    than stacking four overlapping annotations.
+    """
+    groups: Dict[int, List[Tuple[str, float]]] = {}
+    for key in PROFILE_SERIES:
+        profile = profiles[key]
+        index = profile.argmax_index
+        if index < 0:
+            continue
+        value = float(profile.values[index])
+        ax.plot([index], [value], marker="*", markersize=12, linestyle="none",
+                color=SCORE_PROFILE_COLOURS[key], markeredgecolor="white",
+                markeredgewidth=0.8, zorder=6)
+        groups.setdefault(index, []).append((key, value))
+
+    # Tallest peak first, so a lower neighbour stacks below an already-placed
+    # box rather than through it.
+    placed: List[Tuple[int, float, float, int]] = []
+    for index, entries in sorted(groups.items(),
+                                 key=lambda kv: -max(v for _, v in kv[1])):
+        top = max(value for _, value in entries)
+        lines = [f"peak · {_residue_name(index, res_ids)}"]
+        lines += [f"{SCORE_DISPLAY_NAMES[key]}  {value:.4f}"
+                  for key, value in entries]
+        # Keep the box inside the axes: left of the star on the right-hand half
+        # of the chain, right of it otherwise; below it when the peak sits high.
+        on_right_half = index > n_res / 2
+        dx = -16 if on_right_half else 16
+        ha = "right" if on_right_half else "left"
+        high = top > 0.6
+        sign = -1 if high else 1
+        va = "top" if high else "bottom"
+        dy = sign * 10.0
+        height = 11.0 * len(lines) + 8.0
+        near = max(0.15 * n_res, 5.0)
+        for prev_index, prev_dy, prev_height, prev_sign in placed:
+            if prev_sign != sign or abs(prev_index - index) > near:
+                continue
+            candidate = prev_dy + sign * (prev_height + 6.0)
+            if abs(candidate) > abs(dy):
+                dy = candidate
+        placed.append((index, dy, height, sign))
+        ax.annotate(
+            "\n".join(lines),
+            xy=(index, top),
+            xytext=(dx, dy),
+            textcoords="offset points",
+            ha=ha, va=va, fontsize=8, family="monospace", zorder=7,
+            bbox=dict(boxstyle="round,pad=0.35", facecolor="white",
+                      edgecolor="#B0BEC5", alpha=0.92),
+            arrowprops=dict(arrowstyle="-", color="#B0BEC5", linewidth=0.8),
+        )
+
+
 def plot_residue_score_profiles(
     iptm: DirectionalPair,
     ipsae: IPSAEResult,
@@ -5931,6 +6415,9 @@ def plot_residue_score_profiles(
     label_x: "Optional[str | ChainLabel]" = None,
     label_y: "Optional[str | ChainLabel]" = None,
     figsize: Tuple[float, float] = (14.0, 10.0),
+    direction: Optional[str] = None,
+    res_ids_x: Optional[np.ndarray] = None,
+    res_ids_y: Optional[np.ndarray] = None,
 ) -> Figure:
     """
     Per-residue score profiles, one panel per direction of the chain pair.
@@ -5939,29 +6426,45 @@ def plot_residue_score_profiles(
     over the profile -- so this figure is where a headline value stops being a
     verdict and becomes a location: which residues carry the interface, whether
     the three ipSAE variants rank the same residue highest, and whether the peak
-    sits on well-predicted backbone or on a low-pLDDT loop.
+    sits on well-predicted backbone or on a low-pLDDT loop. The peak of each
+    series is marked with a star and labelled with its residue number and value,
+    because that number is the score (R062).
 
     The top panel is the `x -> y` direction (rows of `block_xy`, so residues of
     `chain_x`); the bottom is `y -> x`. They are genuinely two measurements, not
     one seen twice, because PAE is asymmetric.
 
+    Only the four values in `PROFILE_SERIES` are drawn. pDockQ, pDockQ2 and LIS
+    are pooled statistics over the interface residue set or over contact pairs
+    and have no per-residue value to plot; see `PROFILE_SERIES` for the full
+    reasoning, including why `mean_ptm_by_residue` is left to the 3D views.
+
     Args:
-        iptm:     `compute_iptm_d0chn` result for the ordered pair.
-        ipsae:    `compute_ipsae` result for the same ordered pair.
-        contacts: Interface contacts of the same ordered pair; supplies the
-                  shaded interface regions.
-        plddt_x:  `(nx,)` pLDDT for `chain_x`.
-        plddt_y:  `(ny,)` pLDDT for `chain_y`.
-        label_x:  Display name for `chain_x`.
-        label_y:  Display name for `chain_y`.
-        figsize:  Figure size in inches.
+        iptm:      `compute_iptm_d0chn` result for the ordered pair.
+        ipsae:     `compute_ipsae` result for the same ordered pair.
+        contacts:  Interface contacts of the same ordered pair; supplies the
+                   shaded interface regions.
+        plddt_x:   `(nx,)` pLDDT for `chain_x`.
+        plddt_y:   `(ny,)` pLDDT for `chain_y`.
+        label_x:   Display name for `chain_x`.
+        label_y:   Display name for `chain_y`.
+        figsize:   Figure size in inches for the two-panel form. A single-panel
+                   form takes half the height.
+        direction: `None` (default) draws both directions; `'xy'` or `'yx'`, per
+                   `resolve_direction`, draws only that one. A viewing choice --
+                   it selects a panel, never a score (R008).
+        res_ids_x: Optional `(nx,)` residue numbers for `chain_x`, used to label
+                   the peak with the residue's real number rather than its
+                   positional index.
+        res_ids_y: Optional `(ny,)` residue numbers for `chain_y`.
 
     Returns:
         The `Figure`.
 
     Raises:
         ValueError: If the three results do not describe the same ordered chain
-            pair, or if a pLDDT array's length does not match its chain.
+            pair, if a pLDDT array's length does not match its chain, or if
+            `direction` is not a recognised direction.
     """
     pair_ids = (contacts.chain_x, contacts.chain_y)
     for name, result in (('ipTM', iptm), ('ipSAE', ipsae)):
@@ -5971,41 +6474,47 @@ def plot_residue_score_profiles(
                 f"the contacts describe {pair_ids}; all three must agree."
             )
 
-    panels = (
-        (_chain_label(contacts.chain_x, label_x), 'forward',
-         contacts.mask_x, np.asarray(plddt_x)),
-        (_chain_label(contacts.chain_y, label_y), 'reverse',
-         contacts.mask_y, np.asarray(plddt_y)),
+    resolved = resolve_direction(direction, contacts.chain_x, contacts.chain_y)
+    name_x = _chain_label(contacts.chain_x, label_x)
+    name_y = _chain_label(contacts.chain_y, label_y)
+
+    all_panels = (
+        (_DIRECTION_FORWARD, name_x, name_y, 'forward',
+         contacts.mask_x, np.asarray(plddt_x), res_ids_x),
+        (_DIRECTION_REVERSE, name_y, name_x, 'reverse',
+         contacts.mask_y, np.asarray(plddt_y), res_ids_y),
     )
+    panels = [panel for panel in all_panels
+              if resolved is None or panel[0] == resolved]
 
-    fig = Figure(figsize=figsize)
-    axes = fig.subplots(2, 1, sharex=False)
+    height = figsize[1] if len(panels) == 2 else figsize[1] / 2.0
+    fig = Figure(figsize=(figsize[0], height))
+    axes = np.atleast_1d(fig.subplots(len(panels), 1, sharex=False))
 
-    for ax, (chain_label, direction, if_mask, plddt_chain) in zip(axes, panels):
+    for ax, (_, row_label, col_label, attr, if_mask, plddt_chain, res_ids) in zip(axes, panels):
         profiles = {
-            'iptm_d0chn': getattr(iptm, direction),
-            'ipsae_d0res': getattr(ipsae.d0res, direction),
-            'ipsae_d0chn': getattr(ipsae.d0chn, direction),
-            'ipsae_d0dom': getattr(ipsae.d0dom, direction),
+            'iptm_d0chn': getattr(iptm, attr),
+            'ipsae_d0res': getattr(ipsae.d0res, attr),
+            'ipsae_d0chn': getattr(ipsae.d0chn, attr),
+            'ipsae_d0dom': getattr(ipsae.d0dom, attr),
         }
         n_res = profiles['iptm_d0chn'].values.shape[0]
         if plddt_chain.shape[0] != n_res:
             raise ValueError(
-                f"{chain_label} has {n_res} residues in its score profile but "
+                f"{row_label} has {n_res} residues in its score profile but "
                 f"{plddt_chain.shape[0]} pLDDT values."
             )
+        if res_ids is not None and np.asarray(res_ids).shape[0] != n_res:
+            raise ValueError(
+                f"{row_label} has {n_res} residues in its score profile but "
+                f"{np.asarray(res_ids).shape[0]} residue numbers."
+            )
+        res_ids = None if res_ids is None else np.asarray(res_ids)
         x = np.arange(n_res)
 
-        ax.plot(x, profiles['iptm_d0chn'].values, label='ipTM',
-                color=SCORE_PROFILE_COLOURS['iptm_d0chn'], linewidth=1.5)
-        ax.plot(x, profiles['ipsae_d0res'].values, label='ipSAE d0res',
-                color=SCORE_PROFILE_COLOURS['ipsae_d0res'], linewidth=1.5)
-        ax.plot(x, profiles['ipsae_d0chn'].values, label='ipSAE d0chn',
-                color=SCORE_PROFILE_COLOURS['ipsae_d0chn'], linewidth=1.2,
-                linestyle='--')
-        ax.plot(x, profiles['ipsae_d0dom'].values, label='ipSAE d0dom',
-                color=SCORE_PROFILE_COLOURS['ipsae_d0dom'], linewidth=1.2,
-                linestyle=':')
+        for key in PROFILE_SERIES:
+            ax.plot(x, profiles[key].values, label=SCORE_DISPLAY_NAMES[key],
+                    color=SCORE_PROFILE_COLOURS[key], **_PROFILE_STYLE[key])
 
         # Secondary axis: pLDDT, on its own 0-100 scale.
         ax_plddt = ax.twinx()
@@ -6013,14 +6522,24 @@ def plot_residue_score_profiles(
         ax_plddt.set_ylabel('pLDDT (grey fill)', color='grey', fontsize=10)
         ax_plddt.set_ylim(0, 100)
         ax_plddt.tick_params(axis='y', labelcolor='grey')
+        ax_plddt.set_zorder(0)
+        ax.set_zorder(1)
+        ax.patch.set_visible(False)
 
         ax.fill_between(x, 0, 1, where=if_mask, alpha=0.12, color=COLOUR_IF,
                         label='Interface region')
+        _annotate_peaks(ax, profiles, n_res, res_ids)
+        ax.plot([], [], linestyle='none', marker='*', markersize=11,
+                color=PEAK_MARKER_COLOUR, markeredgecolor='white',
+                markeredgewidth=0.8,
+                label='peak residue = this direction’s reported score')
+
         ax.set_ylim(0, 1)
-        ax.set_xlabel('Residue index')
+        ax.set_xlim(-0.5, n_res - 0.5)
+        ax.set_xlabel(f'Residue index along {row_label}')
         ax.set_ylabel('Per-residue score (0–1)')
-        ax.set_title(f'Per-Residue Score Profiles — {chain_label}')
-        ax.legend(loc='upper left', fontsize=9)
+        ax.set_title(f'Per-Residue Score Profiles — {row_label} → {col_label}')
+        ax.legend(loc='upper left', fontsize=9, ncol=2)
 
     fig.tight_layout()
     return fig

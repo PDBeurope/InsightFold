@@ -273,7 +273,7 @@ own benchmarks are 0.104 (homodimer) and 0.520 (heterodimer).
 rule, every changed number cites the preprint by page, the metric-vs-threshold citation split
 is written down, and the conservative-not-optimal nuance is recorded for R080 to surface.
 
-### `[ ] R008 — Surface directional asymmetry as a diagnostic`
+### `[x] R008 — Surface directional asymmetry as a diagnostic` — DONE 2026-09-08
 
 **What.** Wherever a score is computed per direction, show **both** directions and their
 difference, rather than silently collapsing to one number. Requested by the user 2026-09-07.
@@ -1040,6 +1040,44 @@ once at the end of W5-W8 than repeatedly.
 
 ---
 
+
+**R008 + R062 outcome, 2026-09-08.**
+
+**The directional breakdown turned out to matter far more than the fixtures first suggested.**
+The heterodimer's 0.15 ipSAE spread was not the extreme case. On FX-010 (`AF-0000000211026350`,
+Rbx1 108 + CUL3 768) the spread is **0.5685**: ipSAE_d0res is 0.6888 read one way and 0.1203
+read the other, and **5 of 6 directional scores are flagged**. Verified against AFDB's own
+published fields: 0.688783 / 0.120251, matching to 4dp. A reader who does not know the score is
+a max over directions would read 0.6888 as "this interface is fine" when one chain's view of
+the other is 0.12.
+
+The report states the consequence in band terms, generated from `traffic_light` rather than
+canned: "The gap crosses a band edge: CONFIDENT one way, BELOW AFDB THRESHOLD the other."
+
+**`DIRECTION` is a viewing control, not a scoring parameter.** It accepts `None`/`'xy'`/`'yx'`,
+positional `'ab'`/`'ba'`, or real chain ids, and a typo raises rather than silently showing the
+wrong direction. Verified: the `Score Results` block is byte-identical between
+`DIRECTION=None` and `DIRECTION='yx'`, so the headline numbers keep matching `ipsae.py` and
+AFDB.
+
+**pDockQ is reported as symmetric with a dash, never a zero delta**, on the grounds that a zero
+would suggest a difference had been measured. On the homodimer the symmetry of the other scores
+is stated as measured rather than assumed, with both columns shown so it can be checked.
+
+**R062: the profile plot now marks the argmax.** Machine-verified on all four fixtures that the
+starred residue's value equals the reported score for every series. That was the missing link —
+the reported score *is* one residue's value, and nothing on the plot said so.
+
+**`mean_ptm_by_residue` deliberately left off**, with a good argument: every other series on the
+figure obeys "reported score = max over the profile", which is exactly what the new star
+asserts. pDockQ2 pools over contact *pairs*, so it is neither the max nor any function of the
+per-residue array; starring it would reintroduce the "is this correct?" confusion R062 exists to
+remove. It is also `NaN` for non-interface residues (86 of 344 residues are interface on the
+homodimer, 22 of 282 on the heterodimer), so it would render as a mostly-absent broken line.
+Reserved for R074's 3D view, where the contact set is visible.
+
+250 doctests pass. Four fixtures execute end to end, plus a fifth run with `DIRECTION='yx'`.
+
 ## W5 — Section 3, PAE Matrix Decomposition
 
 ### `[ ] R050 — Fix the full PAE heatmap size, and the contact map's aspect`
@@ -1128,7 +1166,7 @@ honestly without the papers.
 sufficient for the mechanical breakdown, so these subsections should carry the *reasoning*,
 not re-derive the arithmetic.
 
-### `[ ] R062 — Rework the per-residue score profile plot`
+### `[x] R062 — Rework the per-residue score profile plot` — DONE 2026-09-08
 
 > User note: *"The plot in the per-residue score profiles is odd... Actually, no, it's only
 > specific for ipTM and ipSAE d0res, d0chn, and d0dom. I like the lightly shaded interface
@@ -1356,7 +1394,7 @@ review.
 | M1 | Ground truth | R001, R002, R002b, R009 | 4 | R002b added 2026-09-08 |
 | M2 | Module extracted; notebook shrunk 54% | R010, R010b, R011-R016 | 8 | **COMPLETE** 2026-09-08 |
 | M3 | Heterodimer support | R020-R025 | 6 | **COMPLETE** 2026-09-08 |
-| M4 | Scoring correctness + Section 4 | R003-R008, R060-R062 | 9 | R003-R007, R060 done; R008, R061, R062 remain |
+| M4 | Scoring correctness + Section 4 | R003-R008, R060-R062 | 9 | R003-R008, R060, R062 done; **R061 remains** |
 | M5 | PAE visuals | R050-R052 | 3 | |
 | M6 | 3D views | R070-R075, R030 | 7 | |
 | M7 | Summary + prose | R080-R082, R040 | 4 | |
