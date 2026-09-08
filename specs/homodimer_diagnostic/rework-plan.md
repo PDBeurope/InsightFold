@@ -54,6 +54,13 @@ Supplied by the user, stored in `specs/homodimer_diagnostic/references/`, which 
 | `lis_kim_2024.pdf` | LIS, bioRxiv 2024.02.19.580970v1 | R002 (widest threshold disagreement in the repo) |
 | `pdockq2_zhu_2023.pdf` | pDockQ2, Bioinformatics btad424 | R002, R061 |
 | `pdockq_bryant_2022.pdf` | pDockQ, Nat Commun s41467-022-28865-w | R061 (the 0.23 cutoff is already agreed across sources) |
+| `afdb_dimers_2026.pdf` | **Han, Tsenkov, Venanzi et al., "AlphaFold Database expands to proteome-scale quaternary structures", bioRxiv 10.64898/2026.03.27.714458v2, posted 3 Jul 2026** | R009, R080. The authoritative source for the AFDB confidence criteria. The user is second author. |
+
+Also: EBI news item, "Millions of protein complexes added to AlphaFold Database shed light on
+how proteins interact", 16 Mar 2026,
+`https://www.ebi.ac.uk/about/news/technology-and-innovation/first-complexes-alphafold-database/`
+— a lay-audience companion to the preprint. Cites 1.7M high-confidence homodimers and states
+no thresholds. Usable as a friendly link for notebook readers, not as a technical citation.
 
 ## Open questions
 
@@ -134,6 +141,62 @@ reproduced independently against the live AFDB PAE endpoints and matched to thre
    for its own max-instead-of-mean bug.
 5. pDockQ2's sigmoid is bounded on [0.005, **1.315**] and can exceed 1.0. It must never be
    presented as a probability or a percentage.
+
+### `[ ] R009 — Adopt the AFDB joint criterion and published confidence bands`
+
+**What.** Fold the AFDB preprint into `threshold-reference.md` and the module's `THRESHOLDS`,
+replacing invented numbers with AFDB's published scheme. Decided with the user 2026-09-08.
+
+**Verified quotes from `references/afdb_dimers_2026.pdf`** (extracted and checked against the
+PDF text; page numbers are PDF pages):
+
+- p.5 — the criterion and its provenance:
+  > "We adopted a combined high-confidence criterion requiring both community-established
+  > cutoffs of ipSAEmax >= 0.6[32,34,35] and pDockQ2max >= 0.23, corresponding to the DockQ
+  > 'acceptable' quality boundary[36]. This joint cutoff yielded a precision of 0.924 (False
+  > Positive Rate (FPR)= 0.043) for homodimers and 0.958 (FPR=0.004) for heterodimers
+  > (Fig. 2a,b), supporting its use as a quality filter that prioritises precision over recall
+  > given the scale of the release."
+- p.12 — the published confidence bands:
+  > "surfaced entries are further categorised in 'very high-confidence' (ipSAEmax >= 0.8),
+  > 'confident' (0.7 <= ipSAEmax < 0.8), and 'low-confidence' (0.6 <= ipSAEmax < 0.7)."
+- p.11 — the headline scale:
+  > "we compiled over 31 million candidate complexes and surfaced 1.81 million high-confidence
+  > assemblies."
+- p.12 — below-threshold models are still available:
+  > "Dimers not passing the previously defined threshold, together with their interface scores,
+  > are provided on the FTP page ftp.ebi.ac.uk/pub/databases/alphafold/collaborations/nvda/."
+
+**Changes to make.**
+1. **Joint AFDB decision rule as a binary badge.** `ipSAE_d0res >= 0.6 AND pDockQ2 >= 0.23`
+   -> PASS / FAIL, presented as "would this model qualify for AFDB high-confidence release?".
+   This is the actual AFDB classifier; seven independent traffic lights are not.
+2. **`ipSAE_d0res` adopts AFDB's four published bands** in place of the invented 0.60/0.30
+   green/amber: `>= 0.8` very high-confidence, `0.7-0.8` confident, `0.6-0.7` low-confidence,
+   `< 0.6` below the AFDB threshold. This removes the largest remaining judgement call.
+3. **Provenance upgrade.** `ipSAE_d0res` green moves from `AFDB-EMPIRICAL` to `PUBLISHED`,
+   cited to Han/Tsenkov 2026 rather than to Dunbrack. `pDockQ2` 0.23 is now double-sourced
+   (Zhu 2023 directly; AFDB 2026 independently).
+4. **Corroborations to record, not re-derive.** The paper's Supplementary Fig. 5 compares max-
+   and min-chain-level aggregation of ipSAE and pDockQ2, confirming that the reported values
+   are the **max over directions** — independent support for R007. The paper's own naming
+   (`ipSAEmax`, `pDockQ2max`) says the same thing.
+
+**Nuance that must reach the notebook, not be smoothed over.** The paper adopts 0.6 as
+"community-established" by citation; it does not derive it. What it derives is the
+*validation* (precision 0.924 / 0.958). Supplementary Figs. 1-2 report MCC-optimal cutoffs of
+**0.104** for homodimers and **0.520** for heterodimers, far below 0.6, and the paper states
+the joint cutoff "prioritises precision over recall given the scale of the release". So 0.6 is
+a deliberately conservative operating point, not an optimum. That is a more accurate and more
+useful thing to tell a notebook user than "the threshold is 0.6".
+
+**Also correct the scale figures.** ~31 million candidate complexes compiled; 19,148,379
+homodimers and 7,561,477 heterodimers analysed; 1,735,475 (9.1%) and 79,392 (1.0%)
+high-confidence respectively; 1.81 million high-confidence assemblies in total.
+
+**Done when.** `threshold-reference.md` and `THRESHOLDS` carry the AFDB bands and the joint
+rule, every changed number cites the preprint by page, and the conservative-not-optimal nuance
+is written down for R080 to surface.
 
 ### `[ ] R008 — Surface directional asymmetry as a diagnostic`
 
@@ -733,14 +796,14 @@ done here, or point them at this file.
 
 ## Milestones and execution order
 
-43 tasks in 8 milestones. Execution model, agreed with the user 2026-09-07: each task goes to
+44 tasks in 8 milestones. Execution model, agreed with the user 2026-09-07: each task goes to
 a **fresh agent**, strictly **sequential**, and each result is verified against source and by
 execution before the next is dispatched. At every milestone boundary, work **stops** for user
 review.
 
 | # | Milestone | Tasks | n | Status |
 |---|-----------|-------|---|--------|
-| M1 | Ground truth (docs only, no code) | R001, R002 | 2 | **COMPLETE** |
+| M1 | Ground truth (docs only, no code) | R001, R002, R009 | 3 | R001, R002 done; R009 added 2026-09-08 |
 | M2 | Module extracted, behaviour preserved | R010-R016 | 7 | |
 | M3 | Heterodimer support | R020-R024 | 5 | |
 | M4 | Scoring correctness + Section 4 | R003-R008, R060-R062 | 9 | |
