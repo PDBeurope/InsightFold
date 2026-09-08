@@ -654,6 +654,33 @@ magic registers them; the notebook no longer imports pyplot at all.
   small interfaces more" is backwards. `d0chn >= d0dom >= d0res` is a theorem, so d0chn is the
   most permissive variant. Carried over verbatim rather than silently reworded.
 
+
+**R060 verification, 2026-09-08. No agent dispatched: the work was already done and the
+acceptance criterion already met, so spawning one would have manufactured activity.**
+
+R003, R004, R005, R006 and R007 all landed in R012, verified against `ipsae.py` run as a
+subprocess (worst delta 4.7e-5, itself the reference's print precision). R024 then added an
+independent confirmation from AFDB's own production values.
+
+**A methodology finding for R092: AFDB's stored precision varies by entry, and it truncates.**
+The heterodimer `AF-0000000211034637` stores per-direction scores at full precision (agreement
+to ~1e-6). The homodimer `AF-0000000065889468` stores **every** field at 2dp, including the
+per-direction ones. Comparing against the 2dp fields naively produced two apparent mismatches;
+both dissolved once truncation was accounted for:
+
+| Value | Ours | Truncated | Rounded | AFDB |
+|-------|------|-----------|---------|------|
+| ipSAE_d0res | 0.914309 | 0.91 | 0.91 | 0.91 |
+| ipTM_d0chn | 0.952902 | 0.95 | 0.95 | 0.95 |
+| pDockQ2 | 0.926932 | **0.92** | 0.93 | **0.92** |
+| LIS_AB | 0.756447 | **0.75** | 0.76 | **0.75** |
+| pDockQ | 0.691274 | 0.69 | 0.69 | 0.69 |
+
+pDockQ2 and LIS distinguish the two conventions, and both say truncate. **R092 must compare
+against the full-precision per-direction fields where they exist, and must truncate rather
+than round when only 2dp is stored** — otherwise it will report false failures on exactly the
+entries that are stored coarsely.
+
 ## W2 — Heterodimer support
 
 > User note: *"Make sure to test notebook on heterodimers too, as it's only really been
@@ -1071,7 +1098,7 @@ has to be rewritten to describe the palette generically or to match the new defa
 
 ## W6 — Section 4, Score Computation
 
-### `[ ] R060 — Apply the formula audit`
+### `[x] R060 — Apply the formula audit` — DONE 2026-09-08 (satisfied by R012 + AFDB cross-check)
 
 **What.** Land R003, R004, R005, R006 in the notebook and the module, then verify against
 `ipsae.py` on both fixtures.
@@ -1329,7 +1356,7 @@ review.
 | M1 | Ground truth | R001, R002, R002b, R009 | 4 | R002b added 2026-09-08 |
 | M2 | Module extracted; notebook shrunk 54% | R010, R010b, R011-R016 | 8 | **COMPLETE** 2026-09-08 |
 | M3 | Heterodimer support | R020-R025 | 6 | **COMPLETE** 2026-09-08 |
-| M4 | Scoring correctness + Section 4 | R003-R008, R060-R062 | 9 | R003, R005, R006, R007 landed early in R012 |
+| M4 | Scoring correctness + Section 4 | R003-R008, R060-R062 | 9 | R003-R007, R060 done; R008, R061, R062 remain |
 | M5 | PAE visuals | R050-R052 | 3 | |
 | M6 | 3D views | R070-R075, R030 | 7 | |
 | M7 | Summary + prose | R080-R082, R040 | 4 | |
