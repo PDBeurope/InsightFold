@@ -139,6 +139,10 @@ __all__ = [
     "download_pae",
     "download_plddt",
     "AccessionLookupError",
+    # local-file mode (R025)
+    "REQUIRED_LOCAL_DOCUMENTS",
+    "MissingLocalDocumentError",
+    "require_local_documents",
     # assembly detection (R023)
     "SUPPORTED_N_CHAINS",
     "SUPPORTED_OLIGOMERIC_STATE",
@@ -671,6 +675,154 @@ def download_pae(prediction: AFDBPrediction, timeout: float = DEFAULT_TIMEOUT) -
 def download_plddt(prediction: AFDBPrediction, timeout: float = DEFAULT_TIMEOUT) -> Any:
     """Download the raw pLDDT JSON for a prediction. Feed it to `parse_plddt`."""
     return download_json(prediction.plddt_url, timeout=timeout)
+
+
+# --- local-file mode (R025) --------------------------------------------------
+# `USE_LOCAL_FILE = True` bypasses this whole section, so the notebook has to be
+# told separately what a *complete* upload looks like. It used to announce that a
+# missing PAE or pLDDT file would make it "skip PAE-dependent analyses", and then
+# skip nothing: `pae_raw` stayed `None`, and two cells later `parse_pae(None)`
+# raised `TypeError: 'NoneType' object is not subscriptable` -- a message with no
+# hint that an upload was the cause, from a cell the user was not looking at.
+#
+# The advertised skip is not worth building, because there is nothing left to
+# skip *to*. Six of the seven values come off the PAE matrix (ipSAE d0res, d0chn
+# and d0dom, ipTM_d0chn, pDockQ2, LIS); the seventh, pDockQ, needs per-residue
+# pLDDT. Drop those two documents and Sections 3, 4, 6 and 7 are empty and the
+# traffic light -- the notebook's entire output -- has nothing to colour. What
+# survives is a contact count and a contact map: a different, much smaller
+# notebook, not this one with a banner on it.
+#
+# That matters more here than the crash does. `threshold-reference.md` s1 rests
+# on the local-file path being the one place the traffic light does real work:
+# every AFDB accession has already passed the 0.6 ipSAE filter, so red is
+# essentially unreachable online. The single route that exercises the full range
+# was the route that crashed.
+#
+# So: refuse at the point of upload, while the user is still looking at the
+# widget, and name every missing file at once with somewhere to get it.
+
+REQUIRED_LOCAL_DOCUMENTS: Tuple[Tuple[str, str, str], ...] = (
+    ("structure", "mmCIF structure", "AF-<id>-model_v<n>.cif"),
+    ("PAE", "PAE document", "AF-<id>-predicted_aligned_error_v<n>.json"),
+    ("pLDDT", "pLDDT document", "AF-<id>-confidence_v<n>.json"),
+)
+"""The three uploads local-file mode requires: `(short name, description, AFDB filename)`.
+
+All three are required, not two-plus-optionals. See the comment above for why a
+partial upload is refused rather than partially analysed."""
+
+
+class MissingLocalDocumentError(ValueError):
+    """
+    Local-file mode was run without all three of mmCIF, PAE and pLDDT.
+
+    A `ValueError` subclass, like `AccessionLookupError` and
+    `UnsupportedAssemblyError`, so a caller already catching `ValueError` keeps
+    working. Raised at upload time rather than allowing a `TypeError` from
+    `parse_pae(None)` further down, and rather than the skip the notebook used
+    to promise and never perform (R025).
+    """
+
+
+def _uploaded(value: Any) -> bool:
+    """True when an upload slot holds something. Empty text or bytes do not count."""
+    if value is None:
+        return False
+    if isinstance(value, (str, bytes, bytearray, list, tuple, dict)):
+        return len(value) > 0
+    return True
+
+
+def require_local_documents(
+    structure: Any,
+    pae: Any,
+    plddt: Any,
+    accession: str = "",
+) -> None:
+    """
+    Refuse a local-file run that is missing any of the three documents.
+
+    Every missing document is named in one message, so a user who uploaded only
+    the mmCIF is not sent round the loop three times.
+
+    Args:
+        structure: The uploaded mmCIF text or bytes; `None` or empty if absent.
+        pae:       The uploaded PAE document, raw or parsed; `None` if absent.
+        plddt:     The uploaded pLDDT document, raw or parsed; `None` if absent.
+        accession: `ACCESSION_ID`, quoted in the advice so that the AFDB URLs
+                   which would supply the missing files are copy-pasteable.
+
+    Returns:
+        `None`, when all three are present.
+
+    Raises:
+        MissingLocalDocumentError: If any is missing, naming which, why it is
+            needed and where to get it.
+
+    Example
+    -------
+    A complete upload passes silently:
+
+    >>> require_local_documents('data_AF...', [{'predicted_aligned_error': [[0.0]]}],
+    ...                         {'confidenceScore': [90.0]})
+
+    A partial one names everything that is missing, at once:
+
+    >>> try:
+    ...     require_local_documents('data_AF...', None, None, accession='AF-123')
+    ... except MissingLocalDocumentError as exc:
+    ...     print(chr(10).join(str(exc).splitlines()[:3]))
+    Local-file mode needs all three documents; 2 were not uploaded.
+      uploaded  : mmCIF structure
+      missing   : PAE document, pLDDT document
+
+    An empty file is not an upload:
+
+    >>> try:
+    ...     require_local_documents('', b'[]', {})
+    ... except MissingLocalDocumentError as exc:
+    ...     print(str(exc).splitlines()[2])
+      missing   : mmCIF structure, pLDDT document
+    """
+    present = {"structure": _uploaded(structure),
+               "PAE": _uploaded(pae),
+               "pLDDT": _uploaded(plddt)}
+    missing = [desc for key, desc, _ in REQUIRED_LOCAL_DOCUMENTS if not present[key]]
+    if not missing:
+        return
+
+    uploaded = [desc for key, desc, _ in REQUIRED_LOCAL_DOCUMENTS if present[key]]
+    filenames = [f"{name}" for key, _, name in REQUIRED_LOCAL_DOCUMENTS
+                 if not present[key]]
+    count = ("one was" if len(missing) == 1 else f"{len(missing)} were")
+    metadata_url = AFDB_PREDICTION_URL.format(accession=accession or "<accession>")
+
+    raise MissingLocalDocumentError(
+        f"Local-file mode needs all three documents; {count} not uploaded.\n"
+        f"  uploaded  : {_wrap_inline(uploaded, 14) if uploaded else '(nothing)'}\n"
+        f"  missing   : {_wrap_inline(missing, 14)}\n"
+        "  why       : six of the seven values are computed from the PAE matrix\n"
+        "              (ipSAE d0res/d0chn/d0dom, ipTM_d0chn, pDockQ2, LIS) and the\n"
+        "              seventh, pDockQ, needs per-residue pLDDT. Without them\n"
+        "              Sections 3, 4, 6 and 7 have nothing to show and the traffic\n"
+        "              light has nothing to colour, so there is no partial run\n"
+        "              worth offering -- only a contact count and a contact map.\n"
+        f"  what to do: upload the missing file{'' if len(missing) == 1 else 's'} "
+        "in the widget above, then re-run this\n"
+        "              cell. For an AFDB model, the download links are the\n"
+        "              `cifUrl`, `paeDocUrl` and `plddtDocUrl` fields of\n"
+        f"                {metadata_url}\n"
+        "              and the files are named\n"
+        + "".join(f"                {name}\n" for name in filenames) +
+        "              For a model of your own, export the PAE matrix and the\n"
+        "              per-residue pLDDT in the AFDB JSON layout that `parse_pae`\n"
+        "              and `parse_plddt` document.\n"
+        "              To analyse an AFDB entry instead, set USE_LOCAL_FILE = "
+        "False\n"
+        "              and put its accession in ACCESSION_ID."
+    )
+
 
 
 # --- assembly detection (R023) ----------------------------------------------

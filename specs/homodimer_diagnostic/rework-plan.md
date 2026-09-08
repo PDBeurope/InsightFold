@@ -65,26 +65,13 @@ no thresholds. Usable as a friendly link for notebook readers, not as a technica
 
 ## Open questions
 
-**Q4 (2026-09-08) — PAE cutoff: RESOLVED by decision, caveat recorded.**
+**Q4 — PAE cutoff: ANSWERED BY EVIDENCE 2026-09-08, not by decision.**
 
-`PAE_CUTOFF` stays at **10.0**, as in `CLAUDE.md` and the notebook today (user, 2026-09-08:
-use the original thresholds).
-
-Recorded so R092 is not surprised by it. The AFDB internal report §7 notes Dunbrack recommends
-15 Å for AlphaFold2 and 10 Å for AF3/Boltz-1, and AFDB dimers are AlphaFold-Multimer via
-ColabFold. The preprint's Methods (p.19) do not state which cutoff the production C++ ipSAE
-implementation used, and the API exposes no ipSAE value to infer it from. Measured effect of
-the choice on the fixtures:
-
-| Fixture | @ 10 | @ 15 | delta |
-|---------|------|------|-------|
-| `AF-0000000065889468` homodimer | 0.9143 | 0.9143 | 0.0000 |
-| `AF-0000000211034637` heterodimer | 0.7057 | 0.6981 | 0.0076 |
-
-Consequence to state once in the notebook, not to act on: a value computed here may differ
-slightly from the one behind an AFDB entry's badge if the production pipeline used a different
-cutoff, and near a band boundary that difference can change the band. R092 compares against
-`ipsae.py` at cutoff 10, which is self-consistent and is what the tolerance applies to.
+The AFDB search endpoint publishes the parameter directly:
+`complexPredictionAccuracy_ipsae_pae_cutoff = 10.0`. **AFDB's production pipeline used 10,
+which is what this notebook uses.** The earlier concern that AF2-family models might warrant
+Dunbrack's 15 does not apply to how AFDB actually computed the released scores. No caveat is
+needed and the 0.6 threshold transfers directly to our numbers.
 
 ---
 
@@ -757,7 +744,7 @@ None of these are documented in `CLAUDE.md`'s field table — add them in R093. 
 clear early failure when `oligomericState` is not `dimer`, replacing the current silent
 zero-length chain B path noted in the `CLAUDE.md` edge cases.
 
-### `[ ] R024 — Register heterodimer fixtures`
+### `[x] R024 — Register heterodimer fixtures` — DONE 2026-09-08
 
 **What.** Add heterodimer fixtures to `fixture-manifest.md` as FX-006 onward.
 
@@ -838,7 +825,7 @@ eight cases down to a bare `Chain A` when nothing is known; the homodimer's serv
 
 Scores unchanged on both fixtures; 191 doctests pass.
 
-### `[ ] R025 — Make USE_LOCAL_FILE mode honest about missing PAE/pLDDT`
+### `[x] R025 — Make USE_LOCAL_FILE mode honest about missing PAE/pLDDT` — DONE 2026-09-08
 
 **Found during R021, pre-existing, not caused by it.** In `USE_LOCAL_FILE` mode the upload
 cells print "PAE file not uploaded — PAE-dependent analyses will be skipped", but nothing
@@ -934,6 +921,62 @@ real pre-fix behaviour was a bare `IndexError` at `pae.chain_ids[1]`. Now it is
 `UnsupportedAssemblyError` at cell 6, before any download. Added to R093.
 
 232 doctests pass, up from 191. All three fixtures execute end to end with scores unchanged.
+
+
+**R024 + R025 outcome, 2026-09-08. Milestone M3 complete.**
+
+**Major finding: AFDB publishes its own IPSAE-derived scores, and we match them.** The search
+endpoint (`q=modelEntityId:<acc>`) returns per-direction production values:
+`complexPredictionAccuracy_ipsae_AB/_BA`, `_ipsae_d0chn_*`, `_ipsae_iptm_d0chn_*`,
+`_pDockQ2_*`, `_LIS_*`, `_ipsae_n0dom_*`, plus the parameters used.
+
+Verified independently on FX-006, nine directional values:
+
+| Value | Ours | AFDB | Delta |
+|-------|------|------|-------|
+| ipSAE d0res A->B | 0.555450 | 0.555450 | 5e-7 |
+| ipSAE d0res B->A | 0.705718 | 0.705718 | 1e-7 |
+| ipSAE d0chn A->B | 0.805532 | 0.805532 | 3e-7 |
+| ipTM_d0chn A->B | 0.668714 | 0.668714 | 2e-7 |
+| ipTM_d0chn B->A | 0.772954 | 0.772954 | 4e-7 |
+| pDockQ2 A->B | 0.705404 | 0.705403 | 5e-7 |
+| pDockQ2 B->A | 0.685271 | 0.685271 | 0 |
+| LIS A->B | 0.608776 | 0.608774 | 2.2e-6 |
+| LIS B->A | 0.592070 | 0.592071 | 6e-7 |
+
+**Worst delta 2.2e-6, roughly 450x tighter than the ±0.001 tolerance.** And `n0dom` matches
+per direction: **250 (A->B) and 252 (B->A)**, exactly the asymmetry R003 was written to fix.
+AFDB's own pipeline confirms both R003 and R007 were right: it publishes pDockQ2 and n0dom per
+direction because they genuinely are directional.
+
+**This changes R092.** The plan assumed `ipsae.py` run locally was the only reference. AFDB's
+production values are a second, independent one, available for every released entry with no
+subprocess. R092 should use both. Only `pDockQ` remains unconfirmed beyond 2 dp, since that is
+all AFDB publishes.
+
+**Two conventions to document, not discrepancies:** AFDB rolls LIS up as the max while
+`ipsae.py` (and this module) use the mean; AFDB's `ipsae_dist_cutoff` of 15.0 governs different
+counts than our contact `DIST_CUTOFF` of 8.0.
+
+**R022's short-first observation was an artefact, now corrected.** Sampling 100 consecutive
+heterodimers: **41 short-first, 57 long-first, 2 equal**. Roughly 41% of AFDB heterodimers put
+the shorter chain first, so the reverse orientation is common, not rare. `AF-0000000211026350`
+(Rbx1 108 + CUL3 768, 1:7.11) is registered as FX-010 and runs clean.
+
+**Fixture manifest grew 5 -> 10.** FX-006 primary heterodimer, FX-007 asymmetry stress
+(8.16:1), FX-008 borderline (the only LOW-CONFIDENCE band value), FX-009 ipTM length dilution
+(ipTM 0.5769 amber vs ipSAE 0.7119 green) and the only fixture with backbone clashes, FX-010
+short-first and metric disagreement. **FX-003, the metric-disagreement fixture that had been
+blocking since the original spec pack, is closed** — FX-010 supplies it from live data.
+
+**R025 chose to fail at upload rather than skip.** Six of seven values need the PAE matrix and
+the seventh needs pLDDT, so a "skip" would leave a contact count and a contact map: a different
+notebook with a banner on it, not this one. The error names every missing file at once and
+tells the user where to get them. Local-file mode with all three files reproduces the online
+scores exactly.
+
+**Defect recorded for R080:** FX-008 and FX-009 show Section 7 printing "consistently HIGH
+confidence across all metrics" while a traffic light is amber.
 
 ## W3 — Section 2, Interface Detection
 
@@ -1285,7 +1328,7 @@ review.
 |---|-----------|-------|---|--------|
 | M1 | Ground truth | R001, R002, R002b, R009 | 4 | R002b added 2026-09-08 |
 | M2 | Module extracted; notebook shrunk 54% | R010, R010b, R011-R016 | 8 | **COMPLETE** 2026-09-08 |
-| M3 | Heterodimer support | R020-R025 | 6 | R020-R023 done |
+| M3 | Heterodimer support | R020-R025 | 6 | **COMPLETE** 2026-09-08 |
 | M4 | Scoring correctness + Section 4 | R003-R008, R060-R062 | 9 | R003, R005, R006, R007 landed early in R012 |
 | M5 | PAE visuals | R050-R052 | 3 | |
 | M6 | 3D views | R070-R075, R030 | 7 | |
