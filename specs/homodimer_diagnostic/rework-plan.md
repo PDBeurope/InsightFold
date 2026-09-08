@@ -473,7 +473,7 @@ so the notebook cell is one call plus a title. Palette handling from R051 lives 
 **Covers cell 24.** One builder function per view, plus the shared `show_mol_view` helper.
 Interacts with everything in W7.
 
-### `[ ] R015 — Absorb interface.py, defer its deletion`
+### `[x] R015 — Absorb interface.py, defer its deletion` — DONE 2026-09-08
 
 **What.** `complex_interface_utils.py` absorbs the useful parts of `src/insightfold/interface.py`.
 Per D10, `interface.py` itself stays on disk until R095.
@@ -601,6 +601,29 @@ band. Preserved rather than silently reconciled, because changing either shifts 
 figure the user has not reviewed. **R070/R072 must reconcile them when View 2 gains its
 legend** — a legend that disagrees with the colours it explains would be worse than the
 current inconsistency.
+
+
+**R015 outcome, 2026-09-08. Framed as a gap analysis, and the honest answer was "almost
+nothing to port".** Every behaviour in `interface.py` was already covered by
+`complex_interface_utils.py`. One documentation gap was found and ported: the CB-CB versus
+AFDB-production CA-CA warning, which had no counterpart in the new module and would have been
+lost at R095. Total diff 22 lines, purely additive. `interface.py` itself untouched per D10.
+
+**Behavioural equivalence proven on both fixtures.** Same records, same chains, same residue
+counts, bitwise-equal coordinates, pLDDT, distance matrices, interface masks and contact
+pairs. Homodimer 172+172, 116 contact pairs; heterodimer 181+101, 22.
+
+**The rename mattered, with evidence.** On the homodimer `n_interface_residues` is 86 while
+`n_contact_pairs` is 116. Two different numbers that the old bare name `n_contacts` conflated,
+and pDockQ needs the 116. On the heterodimer they coincide at 22 by accident of geometry,
+which is why the homodimer is the fixture that proves the point.
+
+**Latent bug found in `interface.py`, reproduced independently.** Its parser treats a blank
+line inside the `_atom_site` loop as a terminator and silently drops every atom after it. CIF
+whitespace is not significant there; the loop ends at the next data name, `loop_`, or `#`.
+Neither fixture triggers it, but any file with an internal blank line would have been parsed
+with a truncated atom list and no error. The new module handles it correctly. This is a good
+argument for R095 actually happening rather than the file lingering.
 
 ## W2 — Heterodimer support
 
@@ -1058,7 +1081,7 @@ review.
 | # | Milestone | Tasks | n | Status |
 |---|-----------|-------|---|--------|
 | M1 | Ground truth | R001, R002, R002b, R009 | 4 | R002b added 2026-09-08 |
-| M2 | Module extracted; **R016 is where the notebook actually shrinks** | R010, R010b, R011-R016 | 8 | R010, R010b, R011-R014 done |
+| M2 | Module extracted; **R016 is where the notebook actually shrinks** | R010, R010b, R011-R016 | 8 | R010, R010b, R011-R015 done; **R016 next** |
 | M3 | Heterodimer support | R020-R024 | 5 | |
 | M4 | Scoring correctness + Section 4 | R003-R008, R060-R062 | 9 | R003, R005, R006, R007 landed early in R012 |
 | M5 | PAE visuals | R050-R052 | 3 | |

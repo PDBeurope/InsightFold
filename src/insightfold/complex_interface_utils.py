@@ -1224,6 +1224,28 @@ def verify_chain_lengths(
 # **pair** count (`ipsae_v4.py:653`, `npairs`). Here they are
 # `n_interface_residues` and `n_contact_pairs`, so neither can be passed where
 # the other is meant.
+#
+# Intentional divergence from AFDB production code, carried over from
+# `interface.py`'s module docstring: AFDB's own production `interface.py`
+# (Majewski, Apache 2.0) uses **CA-CA** distances via a PyTorch `radius_graph`
+# on GPU. This module uses **CB-CB** (CA for glycine) because that is the
+# contact definition `ipsae.py` scores against, and torch is a prohibited
+# dependency here. Do not "fix" the atom-type selection without also updating
+# `compute_pdockq` and `compute_pdockq2`, which consume these contacts.
+#
+# R015 reconciliation record. `src/insightfold/interface.py` -- the earlier,
+# unused module -- was compared symbol by symbol against this section and the
+# structure-parsing section above. Everything it does is covered here, and the
+# two agree exactly on both fixtures (`AF-0000000065889468`,
+# `AF-0000000211034637`): identical chain ids, residue counts, coordinates,
+# pLDDT, distance matrices, interface masks and contact pairs. The only thing
+# ported was the CA-CA/CB-CB warning immediately above; the remaining
+# differences are all improvements already present here (a `ValueError` naming
+# the missing `_atom_site` columns rather than a generic message; a `ValueError`
+# when there is no `_atom_site` loop at all rather than a silent empty result;
+# blank lines inside the atom loop skipped rather than truncating it). Per
+# decision D10 `interface.py` stays on disk until R095, so an early deletion
+# cannot masquerade as a later bug.
 
 
 @dataclass(frozen=True, eq=False)
