@@ -4,18 +4,22 @@
 
 Current readiness: `validation-ready for the homodimer and heterodimer paths`.
 
-FX-006 to FX-010 were added by R024 on 2026-09-08. They close two of the three gaps that held this manifest at `smoke-ready`: there are now heterodimer fixtures at all, and every score on every one of them has been reconciled against AlphaFold DB's *own published* IPSAE-derived values, which serve as the trusted reference snapshot the earlier passes were waiting for (see "Independent Reference Agreement" below). What is still open is the pDockQ reference — AFDB publishes it only to two decimal places — and the FX-002 borderline question.
+FX-006 to FX-010 were added by R024 on 2026-09-08. They close two of the three gaps that held this manifest at `smoke-ready`: there are now heterodimer fixtures at all, and every score on every one of them has been reconciled against AlphaFold DB's *own published* IPSAE-derived values, which serve as the trusted reference snapshot the earlier passes were waiting for (see "Independent Reference Agreement" below).
+
+**Both remaining open items are now closed (R094, 2026-09-08).** `pDockQ` was reconciled beyond 2 dp by R092 against a local `ipsae.py` v4 run (|Δ| ≤ 3.3e-5 on all seven scored fixtures). The FX-002 borderline question is answered, and the answer is **no**: see the correction below.
+
+> **Correction, R094.** FX-002 was registered as a "provisional borderline candidate". R090 scored it: `ipSAE_d0res` **0.7699**, which lands in AFDB's `CONFIDENT` band, well clear of both the 0.6 release cutoff and the 0.7 green threshold. **It is not borderline and never was.** **FX-008** (`AF-0000000211619209`, `ipSAE_d0res` 0.6366) is the only fixture in the set inside AFDB's lowest released band, and it holds the borderline role. FX-002 is re-labelled here as a second high-confidence homodimer, which is what it actually is and what it is genuinely useful for.
 
 Note that the file name says "homodimer" for continuity with the spec pack (D6); since R022 the notebook itself is titled "Dimer Confidence Metric Diagnostic Notebook" and the fixture set covers both assembly types.
 
-Last fixture curation pass: 2026-09-08 (R024).
+Last fixture curation pass: 2026-09-08 (R024). Last correction: 2026-09-08 (R094).
 
 ## Fixture Summary
 
 | Fixture ID | Role | Accession / Source | Status | Purpose |
 |---|---|---|---|---|
 | FX-001 | happy-path / high-confidence reference candidate | `AF-0000000065889468` | ready; values reconciled with AFDB | Exercise complete successful AFDB fetch, parse, metric, visualization, MolViewSpec, and summary workflow |
-| FX-002 | lower-confidence / provisional borderline candidate | `AF-0000000066503175` | candidate-needs-scoring | Stress a current AFDB complex with lower global confidence than FX-001; may become borderline fixture if ipSAE/summary behavior supports it |
+| FX-002 | second high-confidence homodimer (smallest and fastest) | `AF-0000000066503175` | ready; values reconciled with AFDB | 123 + 123, `ipSAE_d0res` 0.7699 (`CONFIDENT`). The fastest positive fixture at 4.16 s, and the second entry in AFDB's all-2-dp storage regime, which is what makes that regime's truncation rule testable. **Not the borderline fixture — that is FX-008** |
 | FX-003 | metric-disagreement | superseded by FX-010 | closed | Was requested from a domain reviewer; FX-010 supplies the disagreement pattern from live AFDB data (see FX-010) |
 | FX-004 | malformed negative | `AF-NOT_A_REAL_ACCESSION` | ready | Confirm clear AFDB identifier-format failure and no downstream stack trace |
 | FX-005 | valid AFDB but unsupported by v1 | `O15552` / `AF-O15552-F1` | ready | Confirm monomer entries are rejected clearly because v1 supports only two-chain dimers |
@@ -92,7 +96,33 @@ Readiness notes:
 - Ready. Also the fixture the local-file path is exercised with (see "Local-File Mode Fixtures"), because it is the only one whose three documents are small enough to keep in a scratch directory comfortably.
 - The IPSAE reference version is pinned in `formula-reference.md` (`ipsae.py` v4, Jan 2026); the remaining reference gap is `pDockQ` at better than 2 dp.
 
-### FX-002: Provisional Lower-Confidence / Borderline Candidate
+### FX-002: Second High-Confidence Homodimer
+
+> **Re-labelled 2026-09-08 by R094.** This fixture was registered as a "provisional lower-confidence / borderline candidate" and left at `candidate-needs-scoring`. R090 scored it and the premise did not hold: `ipSAE_d0res` **0.7699** is in AFDB's `CONFIDENT` band, and every one of its seven values is green. It is a *high*-confidence homodimer, not a borderline one. The borderline role belongs to **FX-008** (0.6366, `LOW-CONFIDENCE`). The original text is retained below the scored values for the record; where it speculates about lower confidence, it was wrong.
+
+Scored values (R090/R092, 2026-09-08; agreement with `ipsae.py` v4 is |Δ| ≤ 2.9e-5 on every value):
+
+| Value | Score | Band |
+|---|---|---|
+| `ipSAE_d0res` | 0.769888 | CONFIDENT |
+| `ipSAE_d0chn` | 0.865987 | HIGH |
+| `ipSAE_d0dom` | 0.855267 | HIGH |
+| `ipTM_d0chn` | 0.813102 | HIGH |
+| `pDockQ` | 0.687671 | HIGH |
+| `pDockQ2` | 0.728214 | HIGH |
+| `LIS` | 0.659187 | HIGH |
+| **AFDB joint criterion** | | **PASS** |
+
+Run profile: 33 of 33 code cells, 0 errors, 0 bytes to stderr, 4.16 s — the fastest fixture in the set. 152 contact pairs; 52 of 123 interface residues per chain (42.3%); interface mean pLDDT 92.08.
+
+Why it is still worth keeping, given it is not borderline:
+
+- It is the **smallest and fastest** positive fixture, so it is the cheapest end-to-end smoke test.
+- With FX-001 it is one of only two entries in AFDB's **all-2-dp storage regime**. That regime is what proves AFDB *truncates* rather than rounds: FX-002's `pDockQ` 0.687671 → AFDB `0.68` is decisive, because rounding would give 0.69 and `pDockQ` has no per-direction field to fall back on. Without a second entry in that regime the rule could not be checked.
+
+The original registration text follows.
+
+#### Original registration (2026-05-07)
 
 Stable identifier:
 
@@ -136,8 +166,8 @@ Expected behavior:
 
 Readiness notes:
 
-- Candidate only. It must be scored by the notebook and, ideally, compared with reference calculations before it can be labelled the official borderline fixture.
-- If `ipSAE_d0res` is not near the intended 0.6 boundary, keep it as a secondary successful fixture and request a better borderline accession.
+- ~~Candidate only. It must be scored by the notebook and, ideally, compared with reference calculations before it can be labelled the official borderline fixture.~~ **Resolved: scored by R090, reconciled against both references by R092.**
+- ~~If `ipSAE_d0res` is not near the intended 0.6 boundary, keep it as a secondary successful fixture and request a better borderline accession.~~ **This is exactly what happened.** `ipSAE_d0res` is 0.7699, nowhere near 0.6, so FX-002 is kept as a secondary successful fixture. No further accession was requested, because FX-008 was found in the R024 heterodimer sweep and already fills the role.
 
 ### FX-003: Metric-Disagreement Fixture
 
@@ -625,16 +655,17 @@ The three conditions that held this manifest at `smoke-ready` have been resolved
 | Former blocker | Status |
 |---|---|
 | FX-003 supplied by a domain reviewer | **Closed** — FX-010 supplies the disagreement pattern from live AFDB data. No reviewer request outstanding. |
-| numeric snapshots frozen from a trusted run | **Closed for six of seven outputs** — reconciled against AFDB's own published IPSAE values to 4 dp on FX-006 to FX-010. `pDockQ` is confirmed only to 2 dp because that is all AFDB publishes. |
+| numeric snapshots frozen from a trusted run | **Closed for all seven outputs (R092)** — reconciled against AFDB's own published IPSAE values to 4 dp on FX-006 to FX-010, and `pDockQ`, which AFDB publishes only to 2 dp, closed separately against a local `ipsae.py` v4 run (|Δ| ≤ 3.3e-5 on all seven scored fixtures). |
 | IPSAE reference version/commit pinned | **Closed** — `ipsae.py` v4 (Jan 2026), pinned in `formula-reference.md` under D2. |
 | score threshold bands approved | **Closed** — `threshold-reference.md`, adopted by R002/R009, with per-threshold provenance (`PUBLISHED` / `DERIVED` / `HEURISTIC`) carried in `THRESHOLDS`. |
-| FX-002 confirmed or replaced | **Open, but no longer blocking** — FX-008 (`ipSAE_d0res` 0.6366) now occupies the borderline role from live data. FX-002 remains unscored and should either be scored or retired in R090. |
+| FX-002 confirmed or replaced | **Closed (R090 scored it, R094 re-labelled it)** — FX-002 is *not* borderline (`ipSAE_d0res` 0.7699, `CONFIDENT`). It is kept as a second high-confidence homodimer, and **FX-008** (0.6366) holds the borderline role. |
 
 ### The working set
 
 | Purpose | Fixture |
 |---|---|
 | primary homodimer, and the local-file path | FX-001 |
+| fastest positive smoke test, and the second all-2-dp AFDB entry | FX-002 |
 | primary heterodimer, per-task verification under D5 | FX-006 |
 | chain-length asymmetry, long-first | FX-007 |
 | chain-length asymmetry, short-first (`nx < ny`) | FX-010 |
@@ -652,8 +683,10 @@ All six online fixtures (FX-001, FX-006, FX-007, FX-008, FX-009, FX-010) execute
 
 ### What is still open
 
-- `pDockQ` has no better-than-2-dp independent reference. Closing it needs a local `ipsae.py` v4 run, which is R092's job.
-- FX-002 is still unscored; either score it or retire it (R090).
-- The Section 7 OVERALL prose disagrees with the per-score traffic lights on FX-008 and FX-009: it prints "consistently HIGH confidence across all metrics" while `ipSAE_d0res` is amber on FX-008 and `ipTM_d0chn` is amber on FX-009. Owned by **R080**; recorded here because two registered fixtures reproduce it and any summary rework must be checked against them.
-- The `aspect='auto'` distortion at extreme length ratios (FX-007, FX-010). Owned by **R050** and **R052**.
+**Nothing. All four items below were closed on 2026-09-08; they are retained with their resolutions so the closure is auditable.**
+
+- ~~`pDockQ` has no better-than-2-dp independent reference.~~ **Closed by R092:** reconciled against a local `ipsae.py` v4 run, |Δ| ≤ 3.3e-5 on all seven scored fixtures.
+- ~~FX-002 is still unscored; either score it or retire it (R090).~~ **Closed by R090 + R094:** scored at `ipSAE_d0res` 0.7699, re-labelled as a second high-confidence homodimer rather than a borderline candidate. Not retired.
+- ~~The Section 7 OVERALL prose disagrees with the per-score traffic lights on FX-008 and FX-009.~~ **Closed by R080 and confirmed non-reproducing by R092.** The phrase "consistently HIGH confidence across all metrics" is gone; the table, the margin plot and the prose are now three renderings of one `ConfidenceSummary` object, so there is no second path that could reach a different verdict. FX-008 now reads *"OVERALL: mixed. 4 of 5 independent scores are green; ipSAE_d0res 0.637 (LOW-CONFIDENCE) is not."*
+- ~~The `aspect='auto'` distortion at extreme length ratios (FX-007, FX-010).~~ **Closed by R050/R052.** Panel aspect is now exact on all four shapes (1.000 / 1.792 / 8.159 / 0.141), and the mask grid follows the data instead of being a fixed 2×2.
 

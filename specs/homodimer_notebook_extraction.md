@@ -35,7 +35,9 @@ diff = coords_A[:, np.newaxis, :] - coords_B[np.newaxis, :, :]
 dist_matrix = np.sqrt((diff ** 2).sum(axis=-1))
 ```
 
-**Known divergence from AFDB production:** The production `interface.py` (Majewski, Apache 2.0) uses CA-CA distances at 8.0 Å via PyTorch `radius_graph` on GPU. The notebook uses CB-CB to match the IPSAE scoring code's contact definition. The spec documents this explicitly; the notebook does not repeat the warning in a markdown cell (minor omission).
+**Known divergence from AFDB production:** AFDB's production interface code (Majewski, Apache 2.0, not in this repo) uses CA-CA distances at 8.0 Å via PyTorch `radius_graph` on GPU. This project uses CB-CB to match the IPSAE scoring code's contact definition. Do not "fix" it without changing the scoring functions too.
+
+**Superseded 2026-09-08.** The vectorised snippet above is now `detect_interface()` in `src/insightfold/complex_interface_utils.py`, and the divergence warning is carried in that module's docstring and in `CLAUDE.md`. The repo's own `src/insightfold/interface.py`, a separate NumPy reimplementation that this document also referred to, was absorbed by R015 and deleted by R095; it had a latent parser bug (a blank line inside the `_atom_site` loop was treated as a terminator, silently dropping every atom after it) that the module does not.
 
 **Why no torch-geometric:** Eliminated as a dependency per the non-functional requirement (no GPU-dependent libraries, Colab free tier).
 

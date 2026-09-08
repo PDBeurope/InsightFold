@@ -36,7 +36,7 @@
 |---|---|
 | `specs/homodimer_diagnostic_notebook_spec.md` | Full requirements, score formulas, acceptance criteria, API schemas |
 | `CLAUDE.md` (Homodimer Confidence Scoring skill) | Canonical formula implementations, PAE quadrant extraction pattern, AFDB API field names, edge-case table |
-| `src/insightfold/interface.py` | CB-CB distance implementation the notebook mirrors (GLY→CA fallback, 8.0 Å cutoff) |
+| `src/insightfold/complex_interface_utils.py` | The whole pipeline: AFDB access, mmCIF/PAE/pLDDT parsing, CB-CB interface detection (GLY→CA fallback, 8.0 Å cutoff), the seven scores, `THRESHOLDS`, plots and 3D views. **Replaces the deleted `src/insightfold/interface.py`** (absorbed 2026-09-08, R015/R095) |
 | `notebooks/analysis_template.ipynb` | Scaffold pattern: cell structure, import block, colour constants |
 
 **Goal:** Produce a findings summary confirming which variables, constants, and patterns must be inherited verbatim from existing code vs. reimplemented in the notebook.

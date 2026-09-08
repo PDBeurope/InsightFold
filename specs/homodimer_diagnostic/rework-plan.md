@@ -10,7 +10,9 @@ Related documents:
 - `specs/homodimer_diagnostic/tasks.md` — the original build plan (Phases 1-7). Still valid
   history; this file supersedes it for all work from 2026-09-07 onward.
 - `specs/homodimer_diagnostic/fixture-manifest.md` — fixture registry, extended by R024.
-- `CLAUDE.md` — project skill file. Several of its formulas are wrong; corrected by R093.
+- `CLAUDE.md` — project skill file. **Rewritten by R093 on 2026-09-08.** It no longer
+  carries its own copies of the formulas or the thresholds, because those copies are what
+  drifted; it points at `formula-reference.md` and `threshold-reference.md` instead.
 
 ---
 
@@ -1531,7 +1533,7 @@ All seven values within ±0.001 of `ipsae.py` v4 on both fixtures. Record in
 `specs/homodimer_diagnostic/validation-report.md`, which T038 in the original `tasks.md`
 already calls for and which does not yet exist.
 
-### `[ ] R093 — Sync CLAUDE.md and the spec pack`
+### `[x] R093 — Sync CLAUDE.md and the spec pack` — DONE 2026-09-08
 - Correct the pDockQ2 sigmoid constants, the pDockQ contact count, the LIS combination rule,
   and the d0dom definition (R001).
 - Replace `THRESHOLDS` with the R002 table.
@@ -1549,7 +1551,7 @@ already calls for and which does not yet exist.
   right. This is exactly why D9 avoids `pip install` — but the contradiction should be
   settled rather than routed around, since it will mislead the next reader.
 
-### `[ ] R095 — Delete the superseded code (last task, per D10)`
+### `[x] R095 — Delete the superseded code (last task, per D10)` — DONE 2026-09-08
 
 **What.** Only once R090-R093 pass. Remove `src/insightfold/interface.py` (absorbed by R015)
 and the duplicated inline `extract_cb_coords` in `notebooks/analysis_template.ipynb`, and
@@ -1559,7 +1561,7 @@ fix the four documents that reference `interface.py` by path.
 import look identical from the traceback. Nothing imports `interface.py` today, so leaving it
 in place costs nothing.
 
-### `[ ] R094 — Close out the original tasks.md`
+### `[x] R094 — Close out the original tasks.md` — DONE 2026-09-08
 Mark T004 (threshold bands), T033-T038 (validation), and T039-T041 (review) against the work
 done here, or point them at this file.
 
@@ -1703,6 +1705,169 @@ so the clone, stale-clone-refresh and `pip install molviewspec` paths never exec
 60 s budget is unmeasured. The bootstrap's `TODO(merge)` still pins the feature branch, so a
 Colab test today would not predict post-merge behaviour anyway.
 
+
+**M8b outcome, 2026-09-08 (R093 + R094 + R095). Milestone M8 complete; the rework is closed.**
+
+**R093 — `CLAUDE.md` rewritten, not patched.** Fifteen verified errors were corrected. The
+structural change matters more than any one of them: the file no longer carries its own copies
+of the seven formulas or the threshold table. Duplication is what produced every error in the
+list, so the fix is to make `formula-reference.md` and `threshold-reference.md` the named
+authorities and leave `CLAUDE.md` as a map plus the traps. What it keeps is what a copy cannot
+drift into being wrong about: which authority owns what, the *name* of each trap, and the facts
+that live nowhere else (the API field names, the endpoint's non-determinism, the module layout,
+D4/D8/D9/D10).
+
+Corrections, all sourced:
+
+| # | `CLAUDE.md` said | Now | Authority |
+|---|---|---|---|
+| 1 | pDockQ2 sigmoid `0.715 / -12.3 / 0.605` | `1.31 / -0.075 / 84.733`, in the module | `formula-reference.md` §6, `ipsae_v4.py:695` |
+| 2 | pDockQ2 pLDDT weighted by contact multiplicity (`np.repeat`/`np.tile`) | unweighted mean over unique interface residues | `formula-reference.md` §6 (D6), `ipsae_v4.py:692` |
+| 3 | pDockQ `n` = interface residue count | contact **pair** count, and the two names are separated (`n_interface_residues` vs `n_contact_pairs`) | `formula-reference.md` §5, `ipsae_v4.py:653, 664` |
+| 4 | LIS combined with `max` | **mean** of the two directions | `formula-reference.md` §7, `ipsae_v4.py:982` |
+| 5 | `d0dom` = rows of `pae_AB` + rows of `pae_BA`, one value for both directions | per direction: rows-with-any + cols-with-any of that direction's own block | `formula-reference.md` §4, `ipsae_v4.py:751-756` |
+| 6 | `compute_ipsae` a generator, prose promising a flat dict, no per-residue arrays | removed; `ciu.compute_ipsae` returns `IPSAEResult` with all three variants, both directions and the profiles | `formula-reference.md` D7 |
+| 7 | only the scalar `d0_func` | both helpers named, with the `L == 27` divergence (1.0 vs 1.038891) and which score uses which | `formula-reference.md` §0 |
+| 8 | `THRESHOLDS` = `ipsae 0.6/0.4, iptm 0.7/0.5, pdockq 0.23/0.09, pdockq2 0.5/0.23, lis 0.15/0.09` | the canonical table with provenance per number, plus the four published ipSAE bands | `threshold-reference.md` |
+| 9 | "Primary AFDB classifier: ipSAE_d0res >= 0.6" under a Dunbrack-attributed heading | the joint criterion `ipSAE_d0res >= 0.6 AND pDockQ2 >= 0.23`, attributed to AFDB 2026, with the metric-vs-threshold citation split | `threshold-reference.md` §0, "Citation policy" |
+| 10 | metadata fields `geneNames`, `modelVersion` | `gene`, `latestVersion` (both printed `N/A` on every run for months) | R020, re-verified live |
+| 11 | no `assemblyType` / `oligomericState` / `complexComposition` / `isComplex` / `chainId`, no `chains[].name` | all documented, `oligomericStateDescription` marked optional (absent on both fixtures) | R021, R023, re-verified live |
+| 12 | "consume `result[0]`" | one entry per chain in **non-deterministic** order; key by `chainId` | R020 |
+| 13 | no `/api/search` | documented, including AFDB's own `complexPredictionAccuracy_*` production scores as a second validation reference, the two rounding regimes, the LIS max-vs-mean convention, and `ipsae_pae_cutoff = 10.0` | R024, R092 |
+| 14 | — (absent) | **`complexPredictionAccuracy_ipTM` is AlphaFold's own ipTM, not `ipTM_d0chn`**, up to 0.054 apart; substituting it fails 6 of 7 fixtures | `validation-report.md` §5.7 |
+| 15 | monomer accession "produces zero-length chain B; scores will be 0.0 (no informative error)" | wrong before *and* after: it was a bare `IndexError`, and is now `UnsupportedAssemblyError` before any download | R023 |
+| 16 | zero contacts -> sigmoid minima 0.018 / 0.005 | `0.0`, which is what `ipsae.py` returns and what the ±0.001 criterion requires | `formula-reference.md` §8 |
+
+Also added, because they existed nowhere a future session would look: the module layout and D8,
+the D9 bootstrap with the `TODO(merge)` branch pin flagged prominently, the measured fact that
+every AFDB complex is a dimer (so D4's N-chain work is a local-file feature), the Colab-unverified
+risk, and the conventions section (British spelling, no em dashes, bare `Figure` returns, palette).
+
+**The biopython contradiction is resolved by scoping, and both sides are kept.** The prohibition
+is per-consumer, not repo-wide: it binds `complex_interface_utils.py` and the two dimer
+notebooks, and grep confirms none of the three imports any prohibited package.
+`pyproject.toml`'s heavy set belongs to the other pipelines: `Bio` is imported only by
+`notebooks/protein_model_chem.ipynb`, `pandas` and `scipy` only by `src/insightfold/variants/`
+and `src/pdbe_interfaces/`, `networkx` only by that same notebook. `plotly` is imported by
+nothing and is flagged as a removal candidate. Nothing was deleted from `pyproject.toml`,
+because deleting a dependency another pipeline uses to satisfy a rule that does not bind it
+would be the wrong repair. This is also, restated, exactly why D9 forbids `pip install`.
+
+**R094 — `tasks.md` closed, and three of its tasks were closed by results it did not predict.**
+All 41 tasks are now resolved. T002's borderline blocker was closed by discovering the premise
+was wrong rather than by curation; T003 got expected outputs for seven fixtures against two
+references rather than one fixture against one; T039's single review pass was replaced by the
+per-task protocol, which is the stronger check. T041 records a **recommendation** of beta,
+conditional on the `TODO(merge)` flip and a real Colab run, and says explicitly that the
+decision is the user's rather than making it.
+
+**The FX-002 correction, and why it is worth more than a relabel.** The manifest called FX-002 a
+"provisional borderline candidate" and left it at `candidate-needs-scoring` from May to
+September. It scores `ipSAE_d0res` **0.7699** (CONFIDENT) with all seven values green: it is not
+borderline and never was. FX-008 (0.6366) holds that role. FX-002 is re-labelled as a second
+high-confidence homodimer, and kept rather than retired for a reason the original entry could
+not have known: with FX-001 it is one of only two entries in AFDB's all-2-dp storage regime, and
+its `pDockQ` 0.687671 -> AFDB `0.68` is the single measurement that proves AFDB **truncates**
+rather than rounds (rounding gives 0.69, and `pDockQ` has no per-direction field to fall back
+on). Without a second entry in that regime the rule could not be checked at all. The manifest's
+"What is still open" section is now empty, with each of its four items struck through and its
+resolution named.
+
+**R095 — the deletions, and one that turned into a repair.**
+
+`src/insightfold/interface.py` is deleted. Nothing imported it: the only occurrence of the
+module path anywhere in the repo was inside its own docstring, and the notebook's
+`detect_interface` call resolves to `ciu.detect_interface`. Four documents referenced it by
+path and all four are fixed (`CLAUDE.md`, `specs/homodimer_notebook_extraction.md`, and both
+agent-suite documents), each pointed at `complex_interface_utils.py` with the deletion noted.
+The two original spec documents that say "the attached `interface.py`" are left alone: they mean
+AFDB's *production* file, which is a different thing and is still accurately described.
+
+**`analysis_template.ipynb` could not have been run since it was written.** Removing the
+duplicated inline `extract_cb_coords` meant checking whether the notebook still worked, and the
+check found it did not work *before*: cell 8 carried a `SyntaxError`,
+`f"...{len(meta.get('sequence', '')) or 'N/A')}..."`, with an unmatched `)`. Every code cell was
+parsed to confirm it was the only one. So "do not break it" was not the constraint it looked
+like, and pointing the template at the module was clearly better than leaving a third divergent
+parser beside a corrected `CLAUDE.md`.
+
+What changed, and why it is one coherent change rather than scope creep: making the module
+importable is the prerequisite for removing `extract_cb_coords`, and once the module is imported
+the template's other inline copies are strictly worse than a call. They carried **every** defect
+R093 had just corrected in `CLAUDE.md`: `THRESHOLDS` at `0.6/0.4`, `0.7/0.5`, `0.5/0.23`,
+`0.15/0.09`; pDockQ on the residue count; pDockQ2 on `0.715 / -12.3 / 0.605`; LIS on `max`;
+`d0dom` single-valued; `meta_list[0]`; `geneNames` and `modelVersion`. Leaving them would have
+left the corrected `CLAUDE.md` contradicted by a file in the repo that a future session is meant
+to copy from.
+
+Cells 2, 3, 8, 10, 11, 13, 14, 15, 16 and 20 now call the module; the D9 bootstrap replaces the
+bare `pip install`, carrying the same `TODO(merge)` marker; the blanket
+`warnings.filterwarnings('ignore')` is gone. Three markdown cells that described the old
+inline design were rewritten rather than left describing code that is no longer there.
+Incidental repairs: the `SyntaxError`, the non-deterministic `meta_list[0]`, the two wrong field
+names, the hard-coded `'bcif'` format against a possibly-empty URL, and cell ids (the file
+declared nbformat 4.5 and carried none, which is a warning that becomes a hard error).
+
+**Verified after every deletion, not before.**
+
+| Check | Result |
+|---|---|
+| `import insightfold.complex_interface_utils` with `src` on the path | OK |
+| `import insightfold.interface` | `ModuleNotFoundError`, as intended |
+| Module doctests | **299 passed, 0 failed** (unchanged) |
+| `homodimer_diagnostic.ipynb` on FX-001, `nbclient` | 33 code cells, **0 errors, 0 bytes to stderr**, 4.6 s |
+| FX-001 scores after the deletion | ipSAE_d0res 0.9143, d0chn 0.9529, d0dom 0.9527, ipTM_d0chn 0.9529, pDockQ 0.6913, pDockQ2 0.9269, LIS 0.7564, 116 contact pairs, AFDB PASS - **identical to `validation-report.md`** |
+| `analysis_template.ipynb` on FX-001, `nbclient` | 15 code cells, **0 errors, 0 bytes to stderr**, 3.2 s - it now runs at all, and produces the same seven values as the reference notebook |
+
+The template agreeing with the reference notebook to four decimals is the useful result: it is
+an independent orchestration of the same module, so it would not have matched if the deletion
+had disturbed anything.
+
+**One thing this milestone did not close, and cannot.** Colab is still unverified and the
+bootstrap still pins `homodimer-notebook-rework`. Both are recorded at the top of `CLAUDE.md`
+under a `TODO(merge)` banner and in `tasks.md` T040/T041, because the flip has to happen at
+merge time and testing Colab before it would not predict post-merge behaviour anyway.
+
+
+**M8b outcome, 2026-09-08. PROJECT COMPLETE.**
+
+**`CLAUDE.md` no longer carries its own copies of the formulas or thresholds.** That
+duplication caused every one of the 16 errors corrected, so the file is now a map plus the
+traps, naming `formula-reference.md` and `threshold-reference.md` as the authorities. Sixteen
+verified errors fixed: five wrong formulas, the whole threshold block, the `geneNames` /
+`modelVersion` field names that made two fields print `N/A` on every run, the "consume
+result[0]" instruction that is unsafe under non-deterministic ordering, and the monomer
+edge-case row that was wrong both before and after the rework.
+
+**The biopython contradiction was resolved by scoping, not by deleting.** The prohibition is
+per-consumer, not repo-wide: it binds the module and the two dimer notebooks, none of which
+import anything prohibited. `pyproject.toml`'s heavy set belongs to the other pipelines
+(`Bio` only in `protein_model_chem.ipynb`; `pandas`/`scipy` only in `variants/` and
+`pdbe_interfaces/`). Deleting a dependency another pipeline uses, to satisfy a rule that does
+not bind it, would have been the wrong repair. `plotly` is imported by nothing and is flagged.
+
+**`src/insightfold/interface.py` deleted** after proving nothing imported it. Four documents
+that referenced it by path corrected; two spec documents left alone because they mean AFDB's
+production file, which still exists.
+
+**`analysis_template.ipynb` did not work before this task.** Checking whether removing its
+duplicated `extract_cb_coords` would break it found a pre-existing `SyntaxError` in cell 8, so
+the file had been unrunnable. It also carried inline copies of **every** defect R093 had just
+corrected, which would have left the corrected `CLAUDE.md` contradicted by the very file a
+future session copies from. It now calls the module and runs clean.
+
+**The load-bearing verification:** the template and the reference notebook are independent
+orchestrations of the same module, and both produce ipSAE_d0res 0.9143 on FX-001. They would
+not agree if the deletion had disturbed anything.
+
+**FX-002 corrected and kept**: it scores 0.7699 (CONFIDENT), not borderline, so FX-008 holds
+that role. It stays because with FX-001 it is one of only two entries in AFDB's all-2dp
+regime, and its `pDockQ` 0.687671 -> 0.68 is the single measurement proving AFDB truncates.
+
+**Two items deliberately left open, both banner-flagged:** the bootstrap still pins
+`REPO_BRANCH = 'homodimer-notebook-rework'` behind `TODO(merge)`, and Colab is unverified.
+T041 records a recommendation of beta conditional on both, and says the decision is the user's.
+
 ## Milestones and execution order
 
 46 tasks in 8 milestones. Execution model, agreed with the user 2026-09-07: each task goes to
@@ -1719,7 +1884,7 @@ review.
 | M5 | PAE visuals | R050-R052 | 3 | **COMPLETE** 2026-09-08 |
 | M6 | 3D views | R070-R075, R030 | 7 | **COMPLETE** 2026-09-08 |
 | M7 | Summary + prose | R080-R082, R002b, R004, R040 | 6 | **COMPLETE** 2026-09-08 |
-| M8 | Validation, docs, cleanup | R090-R095 | 6 | R090, R091, R092 done |
+| M8 | Validation, docs, cleanup | R090-R095 | 6 | **COMPLETE** 2026-09-08 |
 
 Rationale for the ordering. M1 first because every number downstream depends on it, and it
 touches no code so it is cheap to redo. M2 before any behavioural change, so later edits land
