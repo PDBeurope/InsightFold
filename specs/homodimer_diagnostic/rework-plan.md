@@ -1287,7 +1287,7 @@ plus the argmax marker, not a rewrite. Chain labels come from R021.
 **What.** Each view gets a markdown block above it: what is drawn, what the colours encode,
 what to look for, and what a problem looks like.
 
-### `[ ] R071 — Show side chains on both chains, coloured by chain`
+### `[x] R071 — Show side chains on both chains, coloured by chain` — DONE 2026-09-08
 
 > User note: *"because it's homodimer, we are only visualising the side-chains of only one
 > chain. But I think we should visualise on both chains regardless... So currently it's tomato
@@ -1319,7 +1319,7 @@ varies meaningfully *along the chain* and therefore the only one worth painting 
 structure. Second, replace "red=low, yellow=mid, green=high" with the actual numbers, tied to
 the R002 thresholds, and add a colour bar or an explicit legend so the mapping is readable.
 
-### `[ ] R073 — Rebuild View 4 (disagreement)`
+### `[x] R073 — Rebuild View 4 (disagreement)` — DONE 2026-09-08
 
 > User note: *"it currently mentions 'Disagreement (green=PAE+contact, blue=PAE confident/no
 > contact, red=contact/low PAE)', but what does that mean? I see PAE + contact. Is it good PAE
@@ -1339,7 +1339,7 @@ source the threshold from R002 instead of a magic 0.5, and colour both chains (o
 coloured today, and the `colour_map_view4` tuples carry a fourth label element that is
 discarded with `_`, so the legend was clearly intended and never built).
 
-### `[ ] R074 — Add pDockQ2 views`
+### `[x] R074 — Add pDockQ2 views` — DONE 2026-09-08
 
 > User note: *"why did we only plot ipSAE? ... What about pDockQ2? You mentioned how strict it
 > is. So let's give it space to shine as well. Maybe have two plots for it like the third and
@@ -1357,7 +1357,7 @@ discarded with `_`, so the legend was clearly intended and never built).
 **Supporting notes.** Requires the module to expose the per-residue `mean_ptm` intermediate,
 which `compute_pdockq2` currently pools away. Fold that into R012.
 
-### `[ ] R075 — Fix the MolViewSpec implementation issues`
+### `[x] R075 — Fix the MolViewSpec implementation issues` — DONE 2026-09-08
 
 **Supporting notes.**
 - `cm.get_cmap('RdYlGn')` in View 3 is deprecated and slated for removal. Use
@@ -1377,6 +1377,54 @@ which `compute_pdockq2` currently pools away. Fold that into R012.
   Either disable the section with a clear message or resolve a usable URL.
 
 ---
+
+
+**M6a outcome, 2026-09-08 (R071 + R073 + R074 + R075 remainder). Six views now, all on both
+chains, all with a legend.**
+
+**The user's suggested side-chain colours would have failed, and the agent measured it rather
+than shipping them.** Cornflower on chain 1 + orange on chain 2 gives **dE 7.3** under
+deuteranopia, because coral simulates to `#BBA83F` and orange to `#D4BE29` — chain 2's side
+chains would be invisible against chain 2's own cartoon, the single most important contrast in
+the view. Fix is structural: chain 2's cartoon is warm so its side chains must be cool; chain
+1's teal desaturates to neutral grey so its side chains must be strongly chromatic. Cornflower
+is **kept but moved to chain 2**, chain 1 takes gold `#FFD400`. Worst pair 7.3 -> **15.1**,
+every within-chain contrast >= 29.9.
+
+The category palette was worse still: the old green/blue/red triple scored **dE 6.0** under
+deuteranopia between *agree* and *contact-only* — the two categories a reader most needs to
+separate were the two that merged. Now Okabe-Ito plus a luminance-separated dark red, worst
+pair 21.5, a 3.6x improvement.
+
+**The disagreement threshold is now sourced, not invented.** `MVS_DISAGREEMENT_THRESHOLD` is
+`THRESHOLDS['ipsae_d0res'].amber` = 0.60, provenance PUBLISHED, replacing the hard-coded 0.5.
+Verified identical.
+
+**pLDDT ladders reconciled by aliasing, so they cannot drift again:**
+`MVS_PLDDT_BANDS is PLDDT_BANDS` is literally `True`. The 2D ladder won because it is
+AlphaFold's published one (strict `>`). Verified: all nine edge values agree, including 100.00
+and 90.00. Consequence — the old 3D ladder **did not draw a residue at exactly pLDDT 100.00**;
+View 2 now paints 172/172 rather than 171/172.
+
+**A genuine scientific finding from the new pDockQ2-vs-ipSAE view.** The `ipsae_only` category
+is empty on all four fixtures, and not from a bug: every interface residue with
+ipSAE_d0res >= 0.60 has a mean contact PAE of 1.8-2.6 A, far better than the 10 A cutoff
+(minimum contact-ptm 0.9362 across all fixtures). **pDockQ2 is never stricter than ipSAE at the
+residue level** — its reputation for strictness comes entirely from the pooling (mean pLDDT x
+mean ptm through a steep sigmoid), not from contact quality. Worth saying in R070/R072's prose,
+since it corrects a natural misreading.
+
+**The directional spread is now localised in 3D.** On FX-010 (0.5685 spread) View 6 shows the
+0.69 direction with 7 confirmed residues on Rbx1 and the 0.12 direction with **zero** on CUL3,
+while 49 of CUL3's 60 interface residues are "pDockQ2 only".
+
+**A trap avoided:** `build_interface_value_view` now drops non-finite values, because
+`mean_ptm_by_residue` is `NaN` for non-interface residues and a colormap paints "bad" values
+**opaque black** — the most emphatic colour in the scene would have marked the residues with no
+measurement at all.
+
+283 doctests (was 254). All seven scores bit-identical on all four fixtures. Notebook runs
+clean with six Mol* views.
 
 ## W8 — Section 7, Diagnostic Summary
 
@@ -1489,7 +1537,7 @@ review.
 | M3 | Heterodimer support | R020-R025 | 6 | **COMPLETE** 2026-09-08 |
 | M4 | Scoring correctness + Section 4 | R003-R008, R060-R062 | 9 | **COMPLETE** 2026-09-08 |
 | M5 | PAE visuals | R050-R052 | 3 | **COMPLETE** 2026-09-08 |
-| M6 | 3D views | R070-R075, R030 | 7 | |
+| M6 | 3D views | R070-R075, R030 | 7 | R071, R073, R074, R075 done; R070, R072, R030 remain |
 | M7 | Summary + prose | R080-R082, R040 | 4 | |
 | M8 | Validation, docs, cleanup | R090-R095 | 6 | |
 

@@ -110,6 +110,7 @@ runs off them; R016 switches the call sites over.
 from __future__ import annotations
 
 import base64
+import math
 import textwrap
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple
@@ -237,11 +238,15 @@ __all__ = [
     "COLOUR_NON_IF",
     "COLOUR_NON_IF_HIST",
     "CHAIN_COLOURS",
+    "COLOUR_SIDE_CHAIN_X",
+    "COLOUR_SIDE_CHAIN_Y",
+    "SIDE_CHAIN_COLOURS",
     "SCORE_PROFILE_COLOURS",
     "PROFILE_SERIES",
     "PEAK_MARKER_COLOUR",
     "PLDDT_BANDS",
     "PLDDT_BAND_COLOURS",
+    "plddt_band",
     "plddt_band_colour",
     "SCORE_DISPLAY_NAMES",
     "AGREEMENT_SCORES",
@@ -265,11 +270,24 @@ __all__ = [
     "MVS_PLDDT_BANDS",
     "MVS_DISAGREEMENT_THRESHOLD",
     "MVS_DISAGREEMENT_CATEGORIES",
+    "MVS_CONTACT_PTM_THRESHOLD",
+    "MVS_PDOCKQ2_AGREEMENT_CATEGORIES",
+    "MVS_UNLIT_LABELS",
     "MVS_VIEW_LABELS",
     "format_view_label",
     # MolViewSpec: structure source
     "StructureSource",
     "resolve_structure_source",
+    # MolViewSpec: legends
+    "LegendEntry",
+    "contact_ptm_to_pae",
+    "format_category_labels",
+    "category_legend",
+    "plddt_legend",
+    "value_ramp_legend",
+    "chain_overview_legend",
+    "legend_text",
+    "legend_html",
     # MolViewSpec: per-residue colouring
     "ColourRun",
     "colour_runs",
@@ -280,8 +298,13 @@ __all__ = [
     "build_chain_overview_view",
     "build_plddt_view",
     "build_interface_value_view",
+    "build_category_view",
     "disagreement_categories",
     "build_disagreement_view",
+    "disagreement_legend",
+    "pdockq2_ipsae_categories",
+    "build_pdockq2_agreement_view",
+    "pdockq2_agreement_legend",
 ]
 
 
@@ -5765,6 +5788,40 @@ bars' light grey would be invisible under 55% alpha."""
 CHAIN_COLOURS: Tuple[str, str] = (COLOUR_A, COLOUR_B)
 """`(first, second)` chain colours, indexed by position in the ordered pair."""
 
+COLOUR_SIDE_CHAIN_X: str = "#FFD400"
+"""Gold. Interface side chains of the **first** chain of the ordered pair, drawn
+over that chain's teal cartoon (R071)."""
+
+COLOUR_SIDE_CHAIN_Y: str = "#6495ED"
+"""Cornflower. Interface side chains of the **second** chain of the ordered
+pair, drawn over that chain's coral cartoon (R071)."""
+
+SIDE_CHAIN_COLOURS: Tuple[str, str] = (COLOUR_SIDE_CHAIN_X, COLOUR_SIDE_CHAIN_Y)
+"""`(first, second)` interface side-chain colours, indexed by position in the
+ordered pair, parallel to `CHAIN_COLOURS`.
+
+**Why gold and cornflower, and why in that order.** Four colours share one
+scene: two cartoons and two sets of side chains. The user proposed cornflower
+for the first chain and orange for the second; simulated under deuteranopia
+(Machado, Oliveira and Fernandes 2009, severity 1.0) that pairing collapses.
+Coral `#FF7043` simulates to a mustard `#BBA83F` and orange `#F5A623` to
+`#D4BE29`, CIEDE2000 `dE = 7.3` apart, so the second chain's side chains would
+have been invisible against the second chain's own cartoon: the single most
+important contrast in the view.
+
+The fix is structural, not a matter of taste. The second chain's cartoon is
+already warm, so its side chains have to be cool; the first chain's cartoon is
+teal, which desaturates to a neutral grey under both deuteranopia and
+protanopia, so its side chains have to be strongly chromatic. Cornflower is
+therefore kept but moved to the second chain, and the first chain takes gold.
+The worst pair over the four colours plus the viewer's white background is then
+`dE = 15.1` (deuteranopia, gold side chains against the coral cartoon of the
+*other* chain) and every within-chain contrast is `dE >= 29.9`.
+
+Gold is also within a hair of `COLOUR_IF`, the amber the 2D figures already use
+for interface residues, so the first chain's sticks read as "interface" in the
+same colour language as the rest of the notebook."""
+
 SCORE_PROFILE_COLOURS: Dict[str, str] = {
     "iptm_d0chn": "#1976D2",
     "ipsae_d0res": "#388E3C",
@@ -6122,6 +6179,49 @@ def _chain_label(chain_id: str, label: "Optional[str | ChainLabel]" = None) -> s
     return str(label)
 
 
+def plddt_band(
+    value: float,
+    bands: Sequence[Tuple[float, str, str]] = PLDDT_BANDS,
+) -> Tuple[str, str]:
+    """
+    AlphaFold's `(colour, label)` for one pLDDT value.
+
+    **The single pLDDT ladder in this module (R075).** Both the 2D figures and
+    the 3D View 2 route through here, so the legend and the colours it explains
+    cannot disagree. A band is the first one the value is *strictly above*,
+    which is how AlphaFold states its own ladder ("Very high (pLDDT > 90)",
+    "Confident (90 > pLDDT > 70)", "Low (70 > pLDDT > 50)", "Very low
+    (pLDDT < 50)"). The lowest band's edge is `-inf`, so every finite value
+    lands in exactly one band and nothing falls through undrawn.
+
+    Args:
+        value: A pLDDT score, 0-100.
+        bands: `(exclusive lower edge, colour, label)` ordered high to low.
+
+    Returns:
+        `(colour, label)` of the band `value` falls in.
+
+    Example
+    -------
+    >>> plddt_band(95.0)
+    ('#1565C0', '>90 (very high)')
+
+    The two documented edges. 90.0 is *not* above 90, so it is confident, not
+    very high; 100.0 is above 90 and is drawn rather than falling through:
+
+    >>> plddt_band(90.0)[1]
+    '70\u201390 (confident)'
+    >>> plddt_band(100.0)[1]
+    '>90 (very high)'
+    >>> plddt_band(0.0)[1]
+    '<50 (very low)'
+    """
+    for minimum, colour, label in bands:
+        if value > minimum:
+            return colour, label
+    return bands[-1][1], bands[-1][2]
+
+
 def plddt_band_colour(value: float) -> str:
     """
     AlphaFold's colour for one pLDDT value.
@@ -6139,10 +6239,7 @@ def plddt_band_colour(value: float) -> str:
     >>> plddt_band_colour(60.0), plddt_band_colour(10.0)
     ('#FFCA28', '#EF6C00')
     """
-    for minimum, colour, _ in PLDDT_BANDS:
-        if value > minimum:
-            return colour
-    return PLDDT_BANDS[-1][1]
+    return plddt_band(value)[0]
 
 
 def score_masks(
@@ -7180,11 +7277,18 @@ def plot_score_agreement(
 # `bands`, `cmap` / `vmin` / `vmax`, `threshold`, `categories` and
 # `MVS_VIEW_LABELS`.
 #
-# Four implementation defects ARE fixed here, because each is a defect rather
-# than a design choice and none of them changes a pixel (R075): the deprecated
+# Four implementation defects were fixed in R014, because each was a defect
+# rather than a design choice and none of them changed a pixel: the deprecated
 # `matplotlib.cm.get_cmap`, the one-component-per-residue payload, the hard-coded
 # chain letters, and the structure URL and format being resolved from two
 # independent expressions that disagree when `bcifUrl` is present but empty.
+#
+# The fifth, the one that did change pixels, is fixed in R075: the module used
+# to carry two disagreeing pLDDT ladders, one for the figures and one for the
+# 3D view. There is now one, `PLDDT_BANDS`, and `MVS_PLDDT_BANDS` is an alias of
+# it. Every view also carries a legend built from the constants it is coloured
+# from (R073, R074), which is what made reconciling the ladders compulsory
+# rather than tidy.
 
 
 # -- view constants ---------------------------------------------------------
@@ -7203,81 +7307,175 @@ MVS_CONTEXT_COLOUR: str = "#BDBDBD"
 enough to read as structure and light enough not to compete with the colours."""
 
 MVS_FAINT_COLOUR: str = "#EEEEEE"
-"""Near-white. The whole-complex cartoon behind View 4, fainter than
-`MVS_CONTEXT_COLOUR` because View 4's three categories are its entire message."""
+"""Near-white. The whole-complex cartoon behind the two categorical views,
+fainter than `MVS_CONTEXT_COLOUR` because those views' categories are their
+entire message."""
 
 MVS_VALUE_CMAP: str = "RdYlGn"
 """Colormap for any per-residue score painted onto a structure: red = low,
 green = high. Resolved through `matplotlib.colormaps`, never through the
 deprecated `matplotlib.cm.get_cmap` the notebook calls (R075).
 
-R072 owns making the mapping legible -- the numbers behind "low" and "high", and
-a colour bar or legend. This constant is the seam if the ramp itself changes."""
+`value_ramp_legend` samples this same ramp for the legend under Views 3 and 5,
+so the numbers behind "low" and "high" are on screen. This constant is the seam
+if the ramp itself changes."""
 
-MVS_PLDDT_BANDS: Tuple[Tuple[float, float, str, str], ...] = (
-    (90.0, 100.0, "#1565C0", ">90 (very high)"),
-    (70.0, 90.0, "#42A5F5", "70–90 (confident)"),
-    (50.0, 70.0, "#FFCA28", "50–70 (low)"),
-    (0.0, 50.0, "#EF6C00", "<50 (very low)"),
-)
-"""pLDDT bands for the 3D view, as `(low, high, colour, label)` tested
-`low <= value < high`.
+MVS_PLDDT_BANDS: Tuple[Tuple[float, str, str], ...] = PLDDT_BANDS
+"""pLDDT bands for the 3D view. **Now literally `PLDDT_BANDS` (R075).**
 
-Two differences from `PLDDT_BANDS`, both preserved from the notebook on purpose:
+There used to be two ladders. This one tested `low <= value < high` over
+half-open intervals, so a residue at exactly 100.00 matched no band and was not
+drawn at all, and 90.0 landed in the top band; `plddt_band_colour` tested
+`value > 90` and put 90.0 in the second band. R014 preserved both rather than
+silently reconciling them, because a 3D view has no oracle and changing either
+shifts colours in a figure nobody had reviewed.
 
-- **The bands are half-open intervals, not one-sided tests.** A residue at
-  exactly 100.0 or below 0.0 matches no band and is therefore not drawn at all.
-  AFDB writes pLDDT to two decimals in the B-factor column and a residue does
-  occasionally reach 100.00.
-- **The edges are inclusive-below, not exclusive.** 90.0 lands in the top band
-  here and in the second band under `plddt_band_colour`, which tests
-  `value > 90`.
+They are reconciled here, in favour of the `>` ladder, because that is the one
+AlphaFold publishes: the AlphaFold DB entry page and the AlphaFold FAQ both
+state the bands as "Very high (pLDDT > 90)", "Confident (90 > pLDDT > 70)",
+"Low (70 > pLDDT > 50)" and "Very low (pLDDT < 50)". The half-open version was
+an artefact of the notebook spelling the ladder out a second time, not a
+different reading of AlphaFold. Two consequences, both wanted: a residue at
+100.00 is now drawn, and 90.0 is confident rather than very high.
 
-Both are visible defects and neither is R014's to fix: this task is a
-behaviour-preserving move and a 3D view has no oracle. Reconciling the two
-ladders belongs with the M6 pass that gives the view a legend."""
+The name is kept because it is exported and because `build_plddt_view` still
+takes a `bands` argument; it is an alias, not a copy, so the two cannot drift
+apart again."""
 
-MVS_DISAGREEMENT_THRESHOLD: float = 0.5
-"""Per-residue score above which View 4 calls PAE "confident".
+MVS_DISAGREEMENT_THRESHOLD: float = THRESHOLDS["ipsae_d0res"].amber
+"""Per-residue ipSAE_d0res at or above which View 4 calls PAE "confident".
 
-**A magic number, and known to be one.** It is unrelated to every cutoff in
-`THRESHOLDS`, and R073 replaces it with the R002 ipSAE threshold. Kept at 0.5
-here only so that R014 reproduces what the notebook draws today."""
+**Sourced from `THRESHOLDS`, not invented (R073).** It used to be a hard-coded
+0.5 unrelated to any published cutoff. It is now
+`THRESHOLDS['ipsae_d0res'].amber`, currently **0.60**: AFDB's release cutoff,
+the same edge below which the Section 7 traffic light turns red, and the ipSAE
+side of the AFDB joint high-confidence criterion. Sourcing it means the view and
+the summary can never disagree about what "confident" means, and that raising
+the cutoff in one place moves both.
+
+The test is `>=`, matching `traffic_light`, not the `>` the notebook used."""
+
+MVS_CONTACT_PTM_THRESHOLD: float = 0.5
+"""Per-residue mean `ptm(PAE, d0=10)` at or above which View 6 calls a residue's
+own contacts well-placed (R074).
+
+Not a fourth magic number: `ptm(PAE, d0=10) = 1 / (1 + (PAE/10)**2)` is exactly
+0.5 when `PAE == 10`, and 10 A is `PAE_CUTOFF`, the same inter-chain PAE cutoff
+ipSAE uses to decide a pair is informative at all. So this cutoff says "the mean
+PAE over this residue's contacts is better than ipSAE's own admission
+threshold", which is the comparison View 6 is built to draw. Verified by
+construction: `ptm_func(PAE_CUTOFF, 10.0) == 0.5`."""
 
 MVS_DISAGREEMENT_CATEGORIES: Tuple[Tuple[str, str, str], ...] = (
-    ("agree", "#4CAF50", "PAE+contact agree"),
-    ("pae_only", "#2196F3", "PAE confident, no contact"),
-    ("contact_only", "#F44336", "Contact, low PAE confidence"),
+    ("confirmed", "#009E73",
+     "Confirmed contact: CB within {d:.0f} A AND ipSAE_d0res >= {t:.2f}"),
+    ("predicted_not_touching", "#0072B2",
+     "Predicted but not touching: ipSAE_d0res >= {t:.2f}, no CB within {d:.0f} A"),
+    ("touching_not_trusted", "#A02020",
+     "Touching but not trusted: CB within {d:.0f} A, ipSAE_d0res < {t:.2f}"),
 )
-"""View 4's three categories, as `(key, colour, label)`.
+"""View 4's categories, as `(key, colour, label template)`.
 
-The notebook builds exactly this table and then discards the label element with
-`_`, so the legend was clearly intended and never drawn. The labels are carried
-here so R073 can draw it, and so the category names can be rewritten in terms a
-reader can act on rather than as a colour key."""
+**Named for what the reader should do about them, not for their colour (R073).**
+The notebook's caption read "green=PAE+contact, blue=PAE confident/no contact,
+red=contact/low PAE", which names the colours and the inputs and never says
+whether any of it is good news. Each label here is a sentence stating both
+conditions and the numbers behind them; `{t}` is filled with the ipSAE cutoff in
+force and `{d}` with the contact distance cutoff, by `format_category_labels`.
+
+**Colours changed, with a measurement.** The old triple was Material green
+`#4CAF50`, blue `#2196F3` and red `#F44336`. Under deuteranopia the green and
+the red simulate to `#A59857` and `#A4932E`, CIEDE2000 `dE = 6.0` apart, so the
+two categories a reader most needs to tell apart were the two that vanished
+into each other. These three are Okabe-Ito's bluish green and blue plus a dark
+red chosen for luminance separation; the worst pair, including the faint base
+cartoon, is `dE = 21.5`.
+
+A residue that is neither confident nor in contact matches no category and is
+left undrawn. `MVS_UNLIT_LABELS` carries the sentence that says so, because a
+legend that lists only what is painted invites the reader to assume the rest was
+not analysed."""
+
+MVS_PDOCKQ2_AGREEMENT_CATEGORIES: Tuple[Tuple[str, str, str], ...] = (
+    ("both", "#009E73",
+     "Both agree, good: contact PAE better than {p:.0f} A AND "
+     "ipSAE_d0res >= {t:.2f}"),
+    ("contacts_only", "#0072B2",
+     "pDockQ2 only: this residue's own contacts are well placed "
+     "(mean contact PAE better than {p:.0f} A) but ipSAE_d0res < {t:.2f}, "
+     "so it is not confident about the partner chain as a whole"),
+    ("ipsae_only", "#F0E442",
+     "ipSAE only: confident about the partner chain (ipSAE_d0res >= {t:.2f}) "
+     "but its own contacts are among the worse-placed "
+     "(mean contact PAE worse than {p:.0f} A)"),
+    ("neither", "#A02020",
+     "Both agree, poor: mean contact PAE worse than {p:.0f} A AND "
+     "ipSAE_d0res < {t:.2f}"),
+)
+"""View 6's categories, as `(key, colour, label template)` (R074).
+
+Two per-residue signals answer the same question from different distances.
+`ipSAE_d0res` measures a residue against the **whole** partner chain, over every
+pair that clears `PAE_CUTOFF`. pDockQ2's `mean_ptm_by_residue` measures it
+against **only the partner residues it actually touches**. The middle two
+categories are the residues where those two answers differ, which is the "why do
+the scores disagree" question the notebook exists to answer, localised onto the
+structure.
+
+Only interface residues are classified: a residue with no contacts has no
+pDockQ2 value at all (`np.nan`), so there is nothing to compare and it is left
+undrawn. `{t}` is the ipSAE cutoff, `{p}` the PAE in Angstrom equivalent to
+`MVS_CONTACT_PTM_THRESHOLD`, both filled by `format_category_labels`.
+
+Colours are Okabe-Ito plus the same dark red as View 4, with `confirmed` /
+`both` deliberately sharing `#009E73` so the two agreement views read as one
+family. Worst pair including the base cartoon, over normal, deuteranopia and
+protanopia vision: `dE = 21.5`."""
+
+MVS_UNLIT_LABELS: Dict[str, str] = {
+    "disagreement": ("Not drawn: no CB within {d:.0f} A and "
+                     "ipSAE_d0res < {t:.2f}, so neither signal fires"),
+    "pdockq2_agreement": ("Not drawn: no CB within {d:.0f} A, so this residue "
+                          "has no pDockQ2 value to compare"),
+}
+"""What the residues a category view leaves unpainted actually mean.
+
+Rendered as the last legend entry, with no swatch. Both category views cover
+only part of the structure, and the reason differs between them; saying so is
+the difference between "not analysed" and "analysed, and the answer was no"."""
 
 MVS_VIEW_LABELS: Dict[str, str] = {
-    "chain_overview": ("View 1: Chain Overview "
-                       "(teal = {x}, coral = {y}, amber = interface)"),
-    "plddt": ("View 2: pLDDT Mapping of {x} and {y} "
-              "(dark blue>90, light blue 70–90, yellow 50–70, orange<50)"),
-    "interface_value": ("View 3: Interface ipSAE d0res score, {x} and {y} "
-                        "(red=low, yellow=mid, green=high)"),
-    "disagreement": ("View 4: Disagreement on {x} (green=PAE+contact, "
-                     "blue=PAE confident/no contact, red=contact/low PAE)"),
+    "chain_overview": (
+        "View 1: Chain overview. Cartoons: {x} teal, {y} coral. "
+        "Interface side chains: {x} gold, {y} cornflower."),
+    "plddt": (
+        "View 2: pLDDT per residue, {x} and {y}, in AlphaFold's own bands."),
+    "interface_value": (
+        "View 3: ipSAE d0res per interface residue, {x} and {y}. "
+        "Red 0.00 to green 1.00."),
+    "disagreement": (
+        "View 4: ipSAE d0res against physical contact, {x} and {y}. "
+        "Where the two signals for 'this residue is at the interface' differ."),
+    "pdockq2_value": (
+        "View 5: pDockQ2 contact quality per interface residue, {x} and {y}. "
+        "Mean ptm of the PAE at each residue's own contacts, red 0.00 to "
+        "green 1.00."),
+    "pdockq2_agreement": (
+        "View 6: pDockQ2 contact quality against ipSAE d0res, {x} and {y}. "
+        "Where a residue's own contacts and its view of the whole partner "
+        "chain disagree."),
 }
 """The caption `show_mol_view` draws above each view.
 
 Templates, not finished strings: `{x}` and `{y}` are filled by
 `format_view_label` with the two chains' display names, so a caption says which
 *proteins* are teal and coral rather than the hard-coded `'A'` and `'B'` the
-notebook used to spell out (R021). View 4's template names only `{x}` because
-the builder colours only `contacts.chain_x` -- a defect R073 owns, and one the
-caption should not paper over.
+notebook used to spell out (R021). Every template names both chains, because
+every view now draws both (R071, R073).
 
-Every one of these is still a colour key rather than an explanation. R070
-replaces them with real supporting text; this dict is where that lands."""
-
+These are one-line captions, not explanations. The legend under each view
+carries the colour key with the cutoffs in force, and R070 owns the supporting
+prose above each view."""
 
 def format_view_label(
     key: str,
@@ -7306,12 +7504,12 @@ def format_view_label(
     >>> format_view_label('chain_overview',
     ...                   ChainLabel('A', gene='ISG20'),
     ...                   ChainLabel('B', gene='Sumo1'))
-    'View 1: Chain Overview (teal = ISG20 (A), coral = Sumo1 (B), amber = interface)'
+    'View 1: Chain overview. Cartoons: ISG20 (A) teal, Sumo1 (B) coral. Interface side chains: ISG20 (A) gold, Sumo1 (B) cornflower.'
 
-    Templates that name only one chain ignore the other:
+    Every view names both chains, because every view draws both:
 
-    >>> format_view_label('disagreement', 'ISG20 (A)', 'Sumo1 (B)')
-    'View 4: Disagreement on ISG20 (A) (green=PAE+contact, blue=PAE confident/no contact, red=contact/low PAE)'
+    >>> format_view_label('disagreement', 'ISG20 (A)', 'Sumo1 (B)')[:64]
+    'View 4: ipSAE d0res against physical contact, ISG20 (A) and Sumo'
     """
     try:
         template = labels[key]
@@ -7320,6 +7518,368 @@ def format_view_label(
             f"No view label for {key!r}; known views: {', '.join(sorted(labels))}."
         ) from None
     return template.format(x=str(label_x), y=str(label_y))
+
+# -- legends ----------------------------------------------------------------
+# Every 3D view now carries a legend, and every legend is built from the same
+# constants the view is coloured from, so the two cannot disagree. That is the
+# whole reason the pLDDT ladders had to be reconciled first (R075): a legend
+# that contradicts the colours it explains is worse than a silent
+# inconsistency, because it looks authoritative.
+#
+# `LegendEntry` is deliberately dumber than a matplotlib colour bar. These
+# legends sit outside the Mol* iframe as ordinary HTML, so they survive the
+# viewer failing to load, they can be read by a screen reader, and they can be
+# printed as text when `IPython` is not available.
+
+
+@dataclass(frozen=True)
+class LegendEntry:
+    """
+    One row of a view's legend.
+
+    Attributes:
+        colour: `'#RRGGBB'` swatch, or `''` for a row that describes something
+                not painted at all (the residues a category view leaves out).
+        label:  The sentence shown next to the swatch.
+        counts: `((chain display name, n), ...)`, empty when a row has no
+                population. Shown as `(ISG20 (A): 41, Sumo1 (B): 45)`.
+    """
+
+    colour: str
+    label: str
+    counts: Tuple[Tuple[str, int], ...] = ()
+
+    @property
+    def total(self) -> int:
+        """Residues in this row across every chain."""
+        return sum(n for _name, n in self.counts)
+
+
+def contact_ptm_to_pae(ptm: float, d0: float = 10.0) -> float:
+    """
+    The PAE, in Angstrom, that a given `ptm(PAE, d0)` corresponds to.
+
+    The inverse of `ptm_func`, used only to state `MVS_CONTACT_PTM_THRESHOLD` in
+    the units a reader thinks in. `ptm = 1 / (1 + (PAE/d0)**2)`, so
+    `PAE = d0 * sqrt(1/ptm - 1)`.
+
+    Args:
+        ptm: A ptm value in `(0, 1]`.
+        d0:  The normalisation the ptm was computed with. pDockQ2 fixes it at 10.
+
+    Returns:
+        The PAE in Angstrom.
+
+    Raises:
+        ValueError: If `ptm` is outside `(0, 1]`, which has no finite inverse.
+
+    Example
+    -------
+    >>> contact_ptm_to_pae(0.5)
+    10.0
+    >>> round(contact_ptm_to_pae(0.8), 3)
+    5.0
+    """
+    if not 0.0 < ptm <= 1.0:
+        raise ValueError(f"ptm must be in (0, 1]; got {ptm}.")
+    return float(d0 * math.sqrt(1.0 / ptm - 1.0))
+
+
+def format_category_labels(
+    categories: Sequence[Tuple[str, str, str]],
+    threshold: float,
+    dist_cutoff: float = DIST_CUTOFF,
+    contact_ptm: Optional[float] = None,
+) -> Tuple[Tuple[str, str, str], ...]:
+    """
+    Fill a category table's label templates with the cutoffs actually in force.
+
+    The category tables carry `{t}` for the ipSAE cutoff, `{d}` for the contact
+    distance cutoff and `{p}` for the contact-PAE cutoff. Filling them here,
+    from the same values the classifier is called with, is what stops a legend
+    quoting a number the view did not use.
+
+    Args:
+        categories:  `(key, colour, label template)` triples.
+        threshold:   Fills `{t}`. The ipSAE_d0res cutoff in force.
+        dist_cutoff: Fills `{d}`. The CB-CB contact cutoff.
+        contact_ptm: The `ptm` cutoff whose PAE equivalent fills `{p}`. Required
+                     only for tables that use `{p}`.
+
+    Returns:
+        `(key, colour, finished label)` triples, in input order.
+
+    Raises:
+        KeyError: If a template uses a placeholder that was not supplied, which
+            is a table/caller mismatch rather than a formatting nicety.
+
+    Example
+    -------
+    >>> format_category_labels(MVS_DISAGREEMENT_CATEGORIES, 0.6)[0][2]
+    'Confirmed contact: CB within 8 A AND ipSAE_d0res >= 0.60'
+    >>> format_category_labels(MVS_PDOCKQ2_AGREEMENT_CATEGORIES, 0.6,
+    ...                        contact_ptm=0.5)[0][2]
+    'Both agree, good: contact PAE better than 10 A AND ipSAE_d0res >= 0.60'
+    """
+    pae = None if contact_ptm is None else contact_ptm_to_pae(contact_ptm)
+    filled = []
+    for key, colour, template in categories:
+        filled.append((key, colour, template.format(t=threshold, d=dist_cutoff, p=pae)))
+    return tuple(filled)
+
+
+def category_legend(
+    categories: Sequence[Tuple[str, str, str]],
+    assigned: Mapping[str, np.ndarray],
+    threshold: float,
+    dist_cutoff: float = DIST_CUTOFF,
+    contact_ptm: Optional[float] = None,
+    unlit_label: Optional[str] = None,
+) -> List[LegendEntry]:
+    """
+    Legend rows for a category view, with the per-chain population of each row.
+
+    Args:
+        categories:  `(key, colour, label template)` triples.
+        assigned:    `{chain display name: (n,) array of category keys}`, in the
+                     order the chains should be listed. `''` marks a residue in
+                     no category.
+        threshold:   The ipSAE cutoff in force; fills `{t}`.
+        dist_cutoff: The contact cutoff; fills `{d}`.
+        contact_ptm: The contact-ptm cutoff; its PAE equivalent fills `{p}`.
+        unlit_label: Template for the trailing "not drawn" row. Omit to leave it
+                     out; the row is added even when its population is zero, so
+                     the legend accounts for every residue either way.
+
+    Returns:
+        One `LegendEntry` per category, in table order, then the unlit row.
+
+    Example
+    -------
+    >>> import numpy as np
+    >>> rows = category_legend(
+    ...     MVS_DISAGREEMENT_CATEGORIES,
+    ...     {'A': np.array(['confirmed', 'confirmed', '']),
+    ...      'B': np.array(['touching_not_trusted', '', ''])},
+    ...     threshold=0.6, unlit_label=MVS_UNLIT_LABELS['disagreement'])
+    >>> [(e.colour, e.total) for e in rows]
+    [('#009E73', 2), ('#0072B2', 0), ('#A02020', 1), ('', 3)]
+    >>> rows[0].counts
+    (('A', 2), ('B', 0))
+    """
+    labelled = format_category_labels(categories, threshold, dist_cutoff, contact_ptm)
+    arrays = {name: np.asarray(keys, dtype=object) for name, keys in assigned.items()}
+
+    entries: List[LegendEntry] = []
+    for key, colour, label in labelled:
+        counts = tuple((name, int((arr == key).sum())) for name, arr in arrays.items())
+        entries.append(LegendEntry(colour=colour, label=label, counts=counts))
+
+    if unlit_label is not None:
+        known = {key for key, _colour, _label in categories}
+        counts = tuple(
+            (name, int(sum(1 for k in arr if k not in known)))
+            for name, arr in arrays.items()
+        )
+        entries.append(LegendEntry(
+            colour='',
+            label=unlit_label.format(t=threshold, d=dist_cutoff,
+                                     p=None if contact_ptm is None
+                                     else contact_ptm_to_pae(contact_ptm)),
+            counts=counts,
+        ))
+    return entries
+
+
+def plddt_legend(
+    values: Optional[Mapping[str, "Sequence[float] | np.ndarray"]] = None,
+    bands: Sequence[Tuple[float, str, str]] = PLDDT_BANDS,
+) -> List[LegendEntry]:
+    """
+    Legend rows for View 2, from the one pLDDT ladder (R075).
+
+    Reads `PLDDT_BANDS`, exactly as `build_plddt_view` does, so the legend and
+    the colours are the same four rows.
+
+    Args:
+        values: `{chain display name: (n,) pLDDT array}` to populate the counts.
+                Omit for a legend with no populations.
+        bands:  The ladder; defaults to the module's single ladder.
+
+    Returns:
+        One `LegendEntry` per band, highest first.
+
+    Example
+    -------
+    >>> rows = plddt_legend({'A': [95.0, 90.0, 100.0, 40.0]})
+    >>> [(e.label, e.total) for e in rows][0]
+    ('>90 (very high)', 2)
+    >>> [e.total for e in rows]
+    [2, 1, 0, 1]
+    """
+    arrays = {} if values is None else {
+        name: np.asarray(vals, dtype=float) for name, vals in values.items()
+    }
+    entries: List[LegendEntry] = []
+    for minimum, colour, label in bands:
+        counts = tuple(
+            (name, int(sum(1 for v in arr if plddt_band(float(v), bands)[1] == label)))
+            for name, arr in arrays.items()
+        )
+        entries.append(LegendEntry(colour=colour, label=label, counts=counts))
+    return entries
+
+
+def value_ramp_legend(
+    title: str,
+    vmin: float = 0.0,
+    vmax: float = 1.0,
+    cmap: "str | Colormap" = MVS_VALUE_CMAP,
+    n_steps: int = 5,
+) -> List[LegendEntry]:
+    """
+    Legend rows sampling a continuous colormap, for the two value views.
+
+    A discrete key rather than a colour bar, because it has to sit outside the
+    Mol* iframe as plain HTML. Colours come from `value_colours`, the same
+    function the view paints with, so the swatches are the ramp itself.
+
+    Args:
+        title:   Row prefix naming the quantity, e.g. `'ipSAE d0res'`.
+        vmin:    Low end of the ramp.
+        vmax:    High end.
+        cmap:    Colormap; defaults to `MVS_VALUE_CMAP`.
+        n_steps: Number of sampled swatches, at least 2.
+
+    Returns:
+        `n_steps` `LegendEntry` rows, high value first.
+
+    Raises:
+        ValueError: If `n_steps < 2`.
+
+    Example
+    -------
+    >>> [(e.colour, e.label) for e in value_ramp_legend('ipSAE d0res', n_steps=3)]
+    [('#006837', 'ipSAE d0res 1.00'), ('#FEFEBD', 'ipSAE d0res 0.50'), ('#A50026', 'ipSAE d0res 0.00')]
+    """
+    if n_steps < 2:
+        raise ValueError(f"value_ramp_legend needs n_steps >= 2; got {n_steps}.")
+    steps = [vmin + (vmax - vmin) * i / (n_steps - 1) for i in range(n_steps)][::-1]
+    colours = value_colours(steps, cmap=cmap, vmin=vmin, vmax=vmax)
+    return [LegendEntry(colour=colour, label=f'{title} {value:.2f}')
+            for value, colour in zip(steps, colours)]
+
+
+def chain_overview_legend(
+    contacts: InterfaceContacts,
+    label_x: str,
+    label_y: str,
+    chain_colours: Optional[Mapping[str, str]] = None,
+    side_chain_colours: Optional[Mapping[str, str]] = None,
+) -> List[LegendEntry]:
+    """
+    Legend rows for View 1: two cartoons and two sets of interface side chains.
+
+    Args:
+        contacts:           The ordered pair being drawn; supplies the interface
+                            residue counts.
+        label_x, label_y:   Display names for the two chains.
+        chain_colours:      `{chain_id: colour}` as passed to the builder.
+        side_chain_colours: `{chain_id: colour}` as passed to the builder.
+
+    Returns:
+        Four `LegendEntry` rows: cartoon x, cartoon y, side chains x, side
+        chains y. The side-chain rows carry the interface residue counts, which
+        is the number a reader wants and the proof that both chains are drawn.
+    """
+    chain_x, chain_y = contacts.chain_x, contacts.chain_y
+    cartoon = (dict(zip((chain_x, chain_y), CHAIN_COLOURS))
+               if chain_colours is None else dict(chain_colours))
+    sides = (dict(zip((chain_x, chain_y), SIDE_CHAIN_COLOURS))
+             if side_chain_colours is None else dict(side_chain_colours))
+    names = {chain_x: label_x, chain_y: label_y}
+    n_if = {chain_x: contacts.n_interface_residues_x,
+            chain_y: contacts.n_interface_residues_y}
+
+    entries = [
+        LegendEntry(colour=cartoon[cid], label=f'{names[cid]} cartoon')
+        for cid in (chain_x, chain_y) if cid in cartoon
+    ]
+    entries += [
+        LegendEntry(colour=sides[cid],
+                    label=f'{names[cid]} interface side chains',
+                    counts=((names[cid], n_if[cid]),))
+        for cid in (chain_x, chain_y) if cid in sides
+    ]
+    return entries
+
+
+def _format_counts(counts: Sequence[Tuple[str, int]]) -> str:
+    """`(A: 41, B: 45)`, or `''` when there are no counts."""
+    if not counts:
+        return ''
+    return ' (' + ', '.join(f'{name}: {n}' for name, n in counts) + ')'
+
+
+def legend_text(entries: Sequence[LegendEntry], title: Optional[str] = None) -> str:
+    """
+    A view's legend as plain text, for a terminal or a failed viewer.
+
+    Args:
+        entries: The rows.
+        title:   Optional heading line.
+
+    Returns:
+        The legend, newline separated, with no trailing newline.
+
+    Example
+    -------
+    >>> print(legend_text([LegendEntry('#009E73', 'Confirmed', (('A', 2),))],
+    ...                   title='View 4'))
+    View 4
+      [#009E73] Confirmed (A: 2)
+    """
+    lines = [] if title is None else [title]
+    for entry in entries:
+        swatch = f'[{entry.colour}]' if entry.colour else '[not drawn]'
+        lines.append(f'  {swatch} {entry.label}{_format_counts(entry.counts)}')
+    return '\n'.join(lines)
+
+
+def legend_html(entries: Sequence[LegendEntry], title: Optional[str] = None) -> str:
+    """
+    A view's legend as an HTML fragment, to `display(HTML(...))` under the view.
+
+    Args:
+        entries: The rows.
+        title:   Optional heading.
+
+    Returns:
+        HTML. Inline styles only, so it renders identically in Jupyter, PyCharm
+        and Colab, none of which share a stylesheet.
+
+    Example
+    -------
+    >>> html = legend_html([LegendEntry('#009E73', 'Confirmed', (('A', 2),))])
+    >>> '#009E73' in html and 'Confirmed (A: 2)' in html
+    True
+    """
+    parts = ['<div style="margin:2px 0 14px; font-size:13px; line-height:1.6;">']
+    if title is not None:
+        parts.append(f'<div style="font-weight:bold; margin-bottom:3px;">{title}</div>')
+    for entry in entries:
+        if entry.colour:
+            swatch = (f'<span style="display:inline-block; width:13px; height:13px; '
+                      f'margin-right:7px; vertical-align:-2px; border:1px solid #999; '
+                      f'background:{entry.colour};"></span>')
+        else:
+            swatch = ('<span style="display:inline-block; width:13px; height:13px; '
+                      'margin-right:7px; vertical-align:-2px; border:1px dashed #999; '
+                      'background:transparent;"></span>')
+        parts.append(f'<div>{swatch}{entry.label}{_format_counts(entry.counts)}</div>')
+    parts.append('</div>')
+    return ''.join(parts)
+
 
 MOLVIEWSPEC_MISSING_MESSAGE: str = (
     "molviewspec is not installed, so the 3D views are unavailable. "
@@ -7733,6 +8293,13 @@ def build_chain_overview_view(
     top, so the interface is visible as a patch of sticks rather than having to
     be inferred from the contact map.
 
+    **Both chains get side chains (R071).** The notebook drew them for the first
+    chain only, which on a homodimer made the interface look one-sided: the
+    contact is symmetric, and half of it was missing from the picture. Each
+    chain's side chains take their own colour, so a stick can be attributed to a
+    chain without tracing it back to its cartoon; see `SIDE_CHAIN_COLOURS` for
+    why those two colours and not the two first proposed.
+
     Args:
         source:             Structure URL and format, from `resolve_structure_source`.
         chains:             `{chain_id: ChainCoords}`, from `parse_structure`.
@@ -7740,10 +8307,9 @@ def build_chain_overview_view(
         chain_colours:      `{chain_id: colour}` for the cartoons. Defaults to
                             `CHAIN_COLOURS` assigned in ordered-pair order.
         side_chain_colours: `{chain_id: colour}` for the interface side chains.
-                            **This is the R071 seam.** Defaults to
-                            `{chain_x: COLOUR_IF}`, i.e. the first chain only,
-                            which is what the notebook draws today; R071 passes
-                            both chains with a colour each.
+                            Defaults to `SIDE_CHAIN_COLOURS` assigned in
+                            ordered-pair order, i.e. **both** chains. Pass a
+                            one-entry mapping to draw only one.
 
     Returns:
         A MolViewSpec `State`. Nothing is rendered; pass it to `show_mol_view`.
@@ -7755,7 +8321,7 @@ def build_chain_overview_view(
     chain_x, chain_y = _ordered_chain_ids(contacts)
     cartoon = (dict(zip((chain_x, chain_y), CHAIN_COLOURS))
                if chain_colours is None else dict(chain_colours))
-    side_chains = ({chain_x: COLOUR_IF}
+    side_chains = (dict(zip((chain_x, chain_y), SIDE_CHAIN_COLOURS))
                    if side_chain_colours is None else dict(side_chain_colours))
     masks = {chain_x: contacts.mask_x, chain_y: contacts.mask_y}
 
@@ -7784,7 +8350,7 @@ def build_plddt_view(
     chains: Mapping[str, ChainCoords],
     contacts: InterfaceContacts,
     plddt: Optional[Mapping[str, np.ndarray]] = None,
-    bands: Sequence[Tuple[float, float, str, str]] = MVS_PLDDT_BANDS,
+    bands: Sequence[Tuple[float, str, str]] = MVS_PLDDT_BANDS,
 ) -> Any:
     """
     View 2: every residue of both chains coloured by its own pLDDT band.
@@ -7793,10 +8359,10 @@ def build_plddt_view(
     high-confidence interface can produce the same contact map, and this is where
     the difference shows.
 
-    A residue in no band gets no component and so is not drawn at all. That is
-    the notebook's behaviour and is preserved deliberately: `MVS_PLDDT_BANDS`'
-    top band is half-open at 100, so a residue at exactly 100.0 falls through
-    every band. See that constant for why this differs from `PLDDT_BANDS`.
+    **Every residue is drawn (R075).** Band lookup goes through `plddt_band`,
+    the module's single ladder, whose lowest edge is `-inf`; the view used to
+    carry its own half-open copy under which a residue at exactly 100.00 matched
+    no band and silently vanished. `plddt_legend` reads the same table.
 
     Args:
         source:   Structure URL and format.
@@ -7806,8 +8372,9 @@ def build_plddt_view(
                   `ChainCoords`. Pass `PLDDTScores.for_chain(...)` to colour from
                   the pLDDT JSON document instead of the mmCIF B-factor column;
                   the two carry the same numbers.
-        bands:    `(low, high, colour, label)` per band, tested as
-                  `low <= value < high`. The seam for a band-scheme change.
+        bands:    `(exclusive lower edge, colour, label)` per band, ordered
+                  high to low, as `PLDDT_BANDS`. The seam for a band-scheme
+                  change; changing it changes the legend too, by construction.
 
     Returns:
         A MolViewSpec `State`.
@@ -7828,14 +8395,8 @@ def build_plddt_view(
                 f"{values.shape[0]} pLDDT values."
             )
 
-        selected: List[int] = []
-        selected_colours: List[str] = []
-        for index, value in enumerate(values):
-            for low, high, colour, _label in bands:
-                if low <= value < high:
-                    selected.append(int(res_ids[index]))
-                    selected_colours.append(colour)
-                    break
+        selected = [int(r) for r in res_ids]
+        selected_colours = [plddt_band(float(value), bands)[0] for value in values]
 
         add_residue_colours(structure, chain_id, selected, selected_colours,
                             representation='cartoon')
@@ -7864,12 +8425,18 @@ def build_interface_value_view(
     interface residue is drawn as ball-and-stick coloured by its own number,
     which turns a single headline score back into a location along the chain.
 
-    **This function is the R072 / R074 seam, and is deliberately score-agnostic.**
-    Section 6's View 3 is this called with ipSAE `d0res` per-residue values
-    (`ipsae.d0res.forward.values` and `.reverse.values`); R074's two pDockQ2 views
-    are the same call with the per-residue mean `ptm` that `compute_pdockq2`
-    exposes. Nothing here knows which score it is painting, so a new view is a
-    new call, not new colouring code.
+    **This function is score-agnostic, and both value views are calls to it.**
+    View 3 is this called with ipSAE `d0res` per-residue values
+    (`ipsae.d0res.forward.values` and `.reverse.values`); View 5 is the same call
+    with `PDockQ2Direction.mean_ptm_by_residue` (R074). Nothing here knows which
+    score it is painting, so a new view is a new call, not new colouring code.
+
+    **Non-finite values are left unpainted.** `mean_ptm_by_residue` is `np.nan`
+    for a residue with no contacts, and a colormap turns `nan` into its "bad"
+    colour, which is opaque black at the default settings: a residue with *no
+    measurement* would have been painted the most emphatic colour in the scene.
+    Such residues are dropped from the selection instead and keep the base
+    cartoon, so "not painted" means "no value" in both value views.
 
     Args:
         source:         Structure URL and format.
@@ -7909,7 +8476,7 @@ def build_interface_value_view(
                 f"Chain {chain_id!r} has {res_ids.shape[0]} residues but "
                 f"{value_array.shape[0]} values."
             )
-        indices = np.where(mask)[0]
+        indices = np.where(np.asarray(mask, dtype=bool) & np.isfinite(value_array))[0]
         add_residue_colours(
             structure,
             chain_id,
@@ -7921,7 +8488,81 @@ def build_interface_value_view(
     return builder.get_state()
 
 
-# -- View 4: PAE / contact disagreement --------------------------------------
+# -- Views 4 and 6: categorical agreement views ------------------------------
+# Two views ask "do two signals about this residue agree?", of two different
+# signal pairs. They share one builder and one legend path, so the second view
+# is a classifier plus a colour table rather than a second copy of the drawing
+# code -- the same discipline `build_interface_value_view` applies to the two
+# continuous views.
+
+
+def build_category_view(
+    source: StructureSource,
+    chains: Mapping[str, ChainCoords],
+    contacts: InterfaceContacts,
+    keys_x: Sequence[str],
+    keys_y: Sequence[str],
+    categories: Sequence[Tuple[str, str, str]],
+    base_colour: str = MVS_FAINT_COLOUR,
+    representation: str = "ball_and_stick",
+) -> Any:
+    """
+    Paint both chains from a per-residue category key, over a faint cartoon.
+
+    The shared engine behind View 4 and View 6. A residue whose key is not in
+    `categories` -- including the empty string the classifiers use for "no
+    category applies" -- gets no component and keeps the base cartoon.
+
+    Args:
+        source:         Structure URL and format.
+        chains:         `{chain_id: ChainCoords}`, from `parse_structure`.
+        contacts:       Interface contacts naming the ordered pair.
+        keys_x:         `(nx,)` category key per residue of `contacts.chain_x`.
+        keys_y:         `(ny,)` category key per residue of `contacts.chain_y`.
+        categories:     `(key, colour, label)` triples; only `key` and `colour`
+                        are read here.
+        base_colour:    Cartoon colour for the whole complex.
+        representation: Representation for the categorised residues.
+
+    Returns:
+        A MolViewSpec `State`.
+
+    Raises:
+        ImportError: If `molviewspec` is not installed.
+        ValueError:  If a key array's length does not match its chain.
+    """
+    _require_molviewspec()
+    chain_x, chain_y = _ordered_chain_ids(contacts)
+    builder, structure = _new_structure(source)
+
+    (structure
+     .component()
+     .representation(type='cartoon')
+     .color(color=base_colour))
+
+    colour_of = {key: colour for key, colour, _label in categories}
+
+    for chain_id, keys in ((chain_x, keys_x), (chain_y, keys_y)):
+        res_ids = _chain_res_ids(chains, chain_id)
+        key_array = np.asarray(keys, dtype=object)
+        if key_array.shape[0] != res_ids.shape[0]:
+            raise ValueError(
+                f"Chain {chain_id!r} has {res_ids.shape[0]} residues but "
+                f"{key_array.shape[0]} category keys."
+            )
+        selected: List[int] = []
+        selected_colours: List[str] = []
+        for index, key in enumerate(key_array):
+            if key in colour_of:
+                selected.append(int(res_ids[index]))
+                selected_colours.append(colour_of[key])
+        add_residue_colours(structure, chain_id, selected, selected_colours,
+                            representation=representation)
+
+    return builder.get_state()
+
+
+# -- View 4: ipSAE confidence against physical contact ------------------------
 
 def disagreement_categories(
     values: "Sequence[float] | np.ndarray",
@@ -7931,16 +8572,21 @@ def disagreement_categories(
     """
     Classify each residue by whether PAE confidence and physical contact agree.
 
-    The three categories are mutually exclusive and do not cover every residue:
-    a residue that is neither confident nor in contact falls in none of them and
-    is left uncoloured, which is the notebook's behaviour.
+    Two independent signals claim a residue is at the interface: a CB atom
+    within `DIST_CUTOFF` of the partner chain, and a per-residue ipSAE_d0res at
+    or above `threshold`. Three of the four combinations are categories; the
+    fourth -- neither signal -- is left uncategorised and undrawn, because
+    painting "nothing to report" over most of a structure hides the report.
+
+    **The cutoff is `THRESHOLDS['ipsae_d0res'].amber`, not a magic 0.5 (R073),**
+    and the test is `>=`, matching `traffic_light`. The notebook used `> 0.5`,
+    a number with no relation to any published or AFDB cutoff, so a residue
+    could be "confident" here and red in the Section 7 summary.
 
     Args:
-        values:         `(n,)` per-residue PAE-derived score, `0..1`.
+        values:         `(n,)` per-residue ipSAE_d0res, `0..1`.
         interface_mask: `(n,)` bool, `True` where the residue touches the partner.
-        threshold:      Score above which PAE is called confident. **R073 sources
-                        this from `THRESHOLDS` instead of the notebook's magic
-                        `0.5`, which is unrelated to any published cutoff.**
+        threshold:      Score at or above which PAE is called confident.
 
     Returns:
         `(n,)` array of `MVS_DISAGREEMENT_CATEGORIES` keys, `''` where none applies.
@@ -7953,7 +8599,14 @@ def disagreement_categories(
     >>> import numpy as np
     >>> mask = np.array([True, False, True, False])
     >>> disagreement_categories([0.9, 0.9, 0.1, 0.1], mask).tolist()
-    ['agree', 'pae_only', 'contact_only', '']
+    ['confirmed', 'predicted_not_touching', 'touching_not_trusted', '']
+
+    The edge is inclusive, and it is the one `THRESHOLDS` publishes:
+
+    >>> MVS_DISAGREEMENT_THRESHOLD == THRESHOLDS['ipsae_d0res'].amber == 0.6
+    True
+    >>> disagreement_categories([0.6, 0.599999], np.array([True, True])).tolist()
+    ['confirmed', 'touching_not_trusted']
     """
     value_array = np.asarray(values, dtype=float)
     mask = np.asarray(interface_mask, dtype=bool)
@@ -7962,11 +8615,11 @@ def disagreement_categories(
             f"disagreement_categories got {value_array.shape[0]} values but "
             f"{mask.shape[0]} mask entries."
         )
-    confident = value_array > threshold
+    confident = value_array >= threshold
     categories = np.full(value_array.shape[0], '', dtype=object)
-    categories[confident & mask] = 'agree'
-    categories[confident & ~mask] = 'pae_only'
-    categories[~confident & mask] = 'contact_only'
+    categories[confident & mask] = 'confirmed'
+    categories[confident & ~mask] = 'predicted_not_touching'
+    categories[~confident & mask] = 'touching_not_trusted'
     return categories
 
 
@@ -7975,73 +8628,253 @@ def build_disagreement_view(
     chains: Mapping[str, ChainCoords],
     contacts: InterfaceContacts,
     values_x: "Sequence[float] | np.ndarray",
+    values_y: "Sequence[float] | np.ndarray",
     threshold: float = MVS_DISAGREEMENT_THRESHOLD,
     categories: Sequence[Tuple[str, str, str]] = MVS_DISAGREEMENT_CATEGORIES,
     base_colour: str = MVS_FAINT_COLOUR,
     representation: str = "ball_and_stick",
 ) -> Any:
     """
-    View 4: where PAE confidence and physical contact disagree.
+    View 4: where ipSAE confidence and physical contact disagree, on both chains.
 
-    Two independent signals say whether a residue is at the interface -- a CB
-    atom within the distance cutoff, and a confident inter-chain PAE -- and this
-    view paints the residues where they differ. Agreement is the common case;
-    the disagreements are what the notebook exists to explain.
+    Agreement is the common case; the disagreements are what the notebook exists
+    to explain. Pair with `disagreement_legend`, which states the cutoff in force
+    and the population of every category.
 
-    Note:
-        Only `contacts.chain_x` is coloured, which is what the notebook draws.
-        That is a defect, and it is **R073's** to fix along with the category
-        naming, the legend the notebook computed and threw away, and sourcing
-        `threshold` from `THRESHOLDS`. It is left alone here because R014 is a
-        behaviour-preserving move.
+    **Both chains are drawn (R073).** The notebook coloured `chain_x` only, so on
+    a homodimer the view showed one copy of a symmetric answer and on a
+    heterodimer it silently omitted a whole protein.
 
     Args:
         source:         Structure URL and format.
         chains:         `{chain_id: ChainCoords}`, from `parse_structure`.
         contacts:       Interface contacts naming the ordered pair.
-        values_x:       `(nx,)` per-residue score for `contacts.chain_x`,
-                        typically `ipsae.d0res.forward.values`.
-        threshold:      Confidence cutoff. The R073 seam.
-        categories:     `(key, colour, label)` per category, keys matching
-                        `disagreement_categories`. The R073 legend seam: the
-                        labels are carried here rather than discarded.
+        values_x:       `(nx,)` per-residue ipSAE_d0res for `contacts.chain_x`,
+                        i.e. `ipsae.d0res.forward.values`.
+        values_y:       `(ny,)` for `contacts.chain_y`, i.e.
+                        `ipsae.d0res.reverse.values`.
+        threshold:      Confidence cutoff, defaulting to the `THRESHOLDS` value.
+        categories:     `(key, colour, label template)` per category.
         base_colour:    Cartoon colour for the rest of the complex.
-        representation: Representation for the coloured residues.
+        representation: Representation for the categorised residues.
 
     Returns:
         A MolViewSpec `State`.
 
     Raises:
         ImportError: If `molviewspec` is not installed.
-        ValueError:  If `values_x` does not match `contacts.chain_x`'s length.
+        ValueError:  If a value array does not match its chain's length.
     """
-    chain_x = contacts.chain_x
-    builder, structure = _new_structure(source)
+    return build_category_view(
+        source, chains, contacts,
+        disagreement_categories(values_x, contacts.mask_x, threshold=threshold),
+        disagreement_categories(values_y, contacts.mask_y, threshold=threshold),
+        categories=categories,
+        base_colour=base_colour,
+        representation=representation,
+    )
 
-    (structure
-     .component()
-     .representation(type='cartoon')
-     .color(color=base_colour))
 
-    res_ids = _chain_res_ids(chains, chain_x)
-    value_array = np.asarray(values_x, dtype=float)
-    if value_array.shape[0] != res_ids.shape[0]:
+def disagreement_legend(
+    contacts: InterfaceContacts,
+    values_x: "Sequence[float] | np.ndarray",
+    values_y: "Sequence[float] | np.ndarray",
+    label_x: str,
+    label_y: str,
+    threshold: float = MVS_DISAGREEMENT_THRESHOLD,
+    dist_cutoff: float = DIST_CUTOFF,
+    categories: Sequence[Tuple[str, str, str]] = MVS_DISAGREEMENT_CATEGORIES,
+) -> List[LegendEntry]:
+    """
+    View 4's legend: the categories, the cutoffs in force, and the populations.
+
+    The legend the notebook computed and threw away (R073). It is built from the
+    same classifier call the view is painted from, so a row cannot claim a colour
+    the view does not use or a count the view does not draw.
+
+    Args:
+        contacts:         The ordered pair drawn.
+        values_x:         Per-residue ipSAE_d0res for `contacts.chain_x`.
+        values_y:         Per-residue ipSAE_d0res for `contacts.chain_y`.
+        label_x, label_y: Display names for the two chains.
+        threshold:        The cutoff in force; appears in every label.
+        dist_cutoff:      The contact cutoff; appears in every label.
+        categories:       `(key, colour, label template)` per category.
+
+    Returns:
+        One `LegendEntry` per category, then the "not drawn" row.
+    """
+    return category_legend(
+        categories,
+        {label_x: disagreement_categories(values_x, contacts.mask_x, threshold=threshold),
+         label_y: disagreement_categories(values_y, contacts.mask_y, threshold=threshold)},
+        threshold=threshold,
+        dist_cutoff=dist_cutoff,
+        unlit_label=MVS_UNLIT_LABELS['disagreement'],
+    )
+
+
+# -- Views 5 and 6: pDockQ2, per residue (R074) -------------------------------
+
+def pdockq2_ipsae_categories(
+    mean_ptm: "Sequence[float] | np.ndarray",
+    ipsae_values: "Sequence[float] | np.ndarray",
+    interface_mask: np.ndarray,
+    contact_ptm_threshold: float = MVS_CONTACT_PTM_THRESHOLD,
+    ipsae_threshold: float = MVS_DISAGREEMENT_THRESHOLD,
+) -> np.ndarray:
+    """
+    Classify each interface residue by whether pDockQ2 and ipSAE agree about it.
+
+    The two scores read the same PAE matrix at different scopes. `ipSAE_d0res`
+    scores a residue against **every** partner residue whose PAE clears
+    `PAE_CUTOFF`; `PDockQ2Direction.mean_ptm_by_residue` scores it against
+    **only the partner residues it physically touches**. Where those disagree is
+    where the two headline scores disagree, and this puts that on the structure.
+
+    Non-interface residues have no pDockQ2 value (`np.nan`) and are left
+    uncategorised: there is nothing to compare, which is a different statement
+    from "the comparison came out badly".
+
+    Args:
+        mean_ptm:              `(n,)` mean `ptm(PAE, d0=10)` over each residue's
+                               own contacts; `np.nan` where there are none.
+        ipsae_values:          `(n,)` per-residue ipSAE_d0res for the same chain
+                               and the same direction.
+        interface_mask:        `(n,)` bool, `True` where the residue has contacts.
+        contact_ptm_threshold: Contact quality at or above which the contacts are
+                               called well placed. Defaults to
+                               `MVS_CONTACT_PTM_THRESHOLD`, i.e. mean contact PAE
+                               better than `PAE_CUTOFF`.
+        ipsae_threshold:       ipSAE_d0res cutoff, from `THRESHOLDS`.
+
+    Returns:
+        `(n,)` array of `MVS_PDOCKQ2_AGREEMENT_CATEGORIES` keys, `''` off the
+        interface.
+
+    Raises:
+        ValueError: If the three arrays have different lengths.
+
+    Example
+    -------
+    >>> import numpy as np
+    >>> mask = np.array([True, True, True, True, False])
+    >>> pdockq2_ipsae_categories([0.9, 0.9, 0.1, 0.1, np.nan],
+    ...                          [0.9, 0.1, 0.9, 0.1, 0.9], mask).tolist()
+    ['both', 'contacts_only', 'ipsae_only', 'neither', '']
+    """
+    ptm_array = np.asarray(mean_ptm, dtype=float)
+    ipsae_array = np.asarray(ipsae_values, dtype=float)
+    mask = np.asarray(interface_mask, dtype=bool)
+    if not (ptm_array.shape[0] == ipsae_array.shape[0] == mask.shape[0]):
         raise ValueError(
-            f"Chain {chain_x!r} has {res_ids.shape[0]} residues but "
-            f"{value_array.shape[0]} values."
+            f"pdockq2_ipsae_categories got {ptm_array.shape[0]} ptm values, "
+            f"{ipsae_array.shape[0]} ipSAE values and {mask.shape[0]} mask "
+            "entries; all three must be parallel."
         )
+    scored = mask & np.isfinite(ptm_array)
+    good_contacts = scored & (ptm_array >= contact_ptm_threshold)
+    good_ipsae = ipsae_array >= ipsae_threshold
 
-    assigned = disagreement_categories(value_array, contacts.mask_x, threshold=threshold)
-    colour_of = {key: colour for key, colour, _label in categories}
+    categories = np.full(ptm_array.shape[0], '', dtype=object)
+    categories[scored & good_contacts & good_ipsae] = 'both'
+    categories[scored & good_contacts & ~good_ipsae] = 'contacts_only'
+    categories[scored & ~good_contacts & good_ipsae] = 'ipsae_only'
+    categories[scored & ~good_contacts & ~good_ipsae] = 'neither'
+    return categories
 
-    selected: List[int] = []
-    selected_colours: List[str] = []
-    for index, key in enumerate(assigned):
-        if key in colour_of:
-            selected.append(int(res_ids[index]))
-            selected_colours.append(colour_of[key])
 
-    add_residue_colours(structure, chain_x, selected, selected_colours,
-                        representation=representation)
+def build_pdockq2_agreement_view(
+    source: StructureSource,
+    chains: Mapping[str, ChainCoords],
+    contacts: InterfaceContacts,
+    mean_ptm_x: "Sequence[float] | np.ndarray",
+    mean_ptm_y: "Sequence[float] | np.ndarray",
+    ipsae_x: "Sequence[float] | np.ndarray",
+    ipsae_y: "Sequence[float] | np.ndarray",
+    contact_ptm_threshold: float = MVS_CONTACT_PTM_THRESHOLD,
+    ipsae_threshold: float = MVS_DISAGREEMENT_THRESHOLD,
+    categories: Sequence[Tuple[str, str, str]] = MVS_PDOCKQ2_AGREEMENT_CATEGORIES,
+    base_colour: str = MVS_FAINT_COLOUR,
+    representation: str = "ball_and_stick",
+) -> Any:
+    """
+    View 6: where pDockQ2's contact quality and ipSAE's chain-wide confidence
+    reach different conclusions about the same residue (R074).
 
-    return builder.get_state()
+    Args:
+        source:                Structure URL and format.
+        chains:                `{chain_id: ChainCoords}`.
+        contacts:              Interface contacts naming the ordered pair.
+        mean_ptm_x:            `(nx,)` `pdockq2.forward.mean_ptm_by_residue`.
+        mean_ptm_y:            `(ny,)` `pdockq2.reverse.mean_ptm_by_residue`.
+        ipsae_x:               `(nx,)` `ipsae.d0res.forward.values`.
+        ipsae_y:               `(ny,)` `ipsae.d0res.reverse.values`.
+        contact_ptm_threshold: Contact-quality cutoff.
+        ipsae_threshold:       ipSAE_d0res cutoff, from `THRESHOLDS`.
+        categories:            `(key, colour, label template)` per category.
+        base_colour:           Cartoon colour for the rest of the complex.
+        representation:        Representation for the categorised residues.
+
+    Returns:
+        A MolViewSpec `State`.
+
+    Raises:
+        ImportError: If `molviewspec` is not installed.
+        ValueError:  If an array does not match its chain's length.
+    """
+    return build_category_view(
+        source, chains, contacts,
+        pdockq2_ipsae_categories(mean_ptm_x, ipsae_x, contacts.mask_x,
+                                 contact_ptm_threshold, ipsae_threshold),
+        pdockq2_ipsae_categories(mean_ptm_y, ipsae_y, contacts.mask_y,
+                                 contact_ptm_threshold, ipsae_threshold),
+        categories=categories,
+        base_colour=base_colour,
+        representation=representation,
+    )
+
+
+def pdockq2_agreement_legend(
+    contacts: InterfaceContacts,
+    mean_ptm_x: "Sequence[float] | np.ndarray",
+    mean_ptm_y: "Sequence[float] | np.ndarray",
+    ipsae_x: "Sequence[float] | np.ndarray",
+    ipsae_y: "Sequence[float] | np.ndarray",
+    label_x: str,
+    label_y: str,
+    contact_ptm_threshold: float = MVS_CONTACT_PTM_THRESHOLD,
+    ipsae_threshold: float = MVS_DISAGREEMENT_THRESHOLD,
+    dist_cutoff: float = DIST_CUTOFF,
+    categories: Sequence[Tuple[str, str, str]] = MVS_PDOCKQ2_AGREEMENT_CATEGORIES,
+) -> List[LegendEntry]:
+    """
+    View 6's legend: the four categories, both cutoffs, and the populations.
+
+    Args:
+        contacts:              The ordered pair drawn.
+        mean_ptm_x:            `pdockq2.forward.mean_ptm_by_residue`.
+        mean_ptm_y:            `pdockq2.reverse.mean_ptm_by_residue`.
+        ipsae_x:               `ipsae.d0res.forward.values`.
+        ipsae_y:               `ipsae.d0res.reverse.values`.
+        label_x, label_y:      Display names for the two chains.
+        contact_ptm_threshold: Contact-quality cutoff, stated as a PAE.
+        ipsae_threshold:       ipSAE_d0res cutoff.
+        dist_cutoff:           Contact cutoff, for the "not drawn" row.
+        categories:            `(key, colour, label template)` per category.
+
+    Returns:
+        One `LegendEntry` per category, then the "not drawn" row.
+    """
+    return category_legend(
+        categories,
+        {label_x: pdockq2_ipsae_categories(mean_ptm_x, ipsae_x, contacts.mask_x,
+                                           contact_ptm_threshold, ipsae_threshold),
+         label_y: pdockq2_ipsae_categories(mean_ptm_y, ipsae_y, contacts.mask_y,
+                                           contact_ptm_threshold, ipsae_threshold)},
+        threshold=ipsae_threshold,
+        dist_cutoff=dist_cutoff,
+        contact_ptm=contact_ptm_threshold,
+        unlit_label=MVS_UNLIT_LABELS['pdockq2_agreement'],
+    )
+
