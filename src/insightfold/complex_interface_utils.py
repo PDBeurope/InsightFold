@@ -111,10 +111,17 @@ from __future__ import annotations
 
 import base64
 import html as _html
+import importlib
+import json
 import math
+import subprocess
+import sys
 import textwrap
 from dataclasses import dataclass, field, replace
-from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence, Tuple
+from pathlib import Path
+from typing import (
+    Any, Dict, List, Literal, Mapping, NamedTuple, Optional, Sequence, Tuple,
+)
 
 import matplotlib
 import matplotlib.patches as mpatches
@@ -306,6 +313,7 @@ __all__ = [
     "value_colours",
     "add_residue_colours",
     # MolViewSpec: display and builders
+    "mol_view_html",
     "show_mol_view",
     "build_chain_overview_view",
     "build_plddt_view",
@@ -317,6 +325,36 @@ __all__ = [
     "pdockq2_ipsae_categories",
     "build_pdockq2_agreement_view",
     "pdockq2_agreement_legend",
+    # notebook orchestration (R100)
+    "describe_checkout",
+    "prepare_environment",
+    "UploadPanel",
+    "UPLOAD_INSTRUCTIONS",
+    "local_upload_panel",
+    "LOCAL_MODE_GATE_NOTE",
+    "fetch_prediction",
+    "SourceDocuments",
+    "load_documents",
+    "format_chain_lengths",
+    "format_chain_report",
+    "format_interface_report",
+    "format_score_mask_usage",
+    "format_iptm_report",
+    "format_ipsae_report",
+    "format_pdockq_report",
+    "format_pdockq2_report",
+    "format_lis_report",
+    "format_score_values",
+    "format_domain_sizes",
+    "InterfacePLDDT",
+    "interface_plddt_stats",
+    "format_plddt_stats",
+    "MOLVIEWSPEC_NO_URL_MESSAGE",
+    "ViewRenderer",
+    "view_renderer",
+    "format_view_conventions",
+    "format_interface_statistics",
+    "format_references",
 ]
 
 
@@ -6640,6 +6678,25 @@ PAE_MATRIX_FIGSIZE: Tuple[float, float] = (6.0, 5.4)
 `figure.dpi = 150`. The PAE matrix is always square, so this one *can* be fixed.
 Was `(10, 9)` -- 1500x1350 px -- which is what made the notebook scroll it."""
 
+PLDDT_FIGSIZE: Tuple[float, float] = (6.0, 5.4)
+"""Figure size for `plot_plddt_distribution`, in inches: 900x810 px at
+`figure.dpi = 150`.
+
+Was `(14, 5)` with the two panels side by side -- 2100x750 px, which the output
+area scales down to about 43%, so each panel arrived roughly 450 px wide and the
+per-residue profile had one pixel per two residues. The panels are now stacked,
+so each one gets the *whole* column, and the figure is sized to the same
+900x810 px budget as `PAE_MATRIX_FIGSIZE`: 900 px is the width a notebook column
+renders 1:1, and 810 px is the height above which the output area starts to
+scroll (M5)."""
+
+PLDDT_PANEL_RATIOS: Tuple[float, float] = (1.0, 1.25)
+"""Height split between the two stacked pLDDT panels, histogram then profile.
+
+The profile is the panel that gains from the full width, and it is also the one
+carrying a six-entry legend inside the axes, so it takes the larger share. The
+histogram is two overlaid distributions and reads fine in the smaller one."""
+
 CONTACT_MAP_PANEL_IN: float = 3.4
 """Longest side, in inches, of the contact-map image in
 `plot_interface_contact_map`. The short side follows from the block's aspect."""
@@ -7708,15 +7765,23 @@ def plot_plddt_distribution(
     plddt_y: np.ndarray,
     label_x: "Optional[str | ChainLabel]" = None,
     label_y: "Optional[str | ChainLabel]" = None,
-    figsize: Tuple[float, float] = (14.0, 5.0),
+    figsize: Tuple[float, float] = PLDDT_FIGSIZE,
 ) -> Figure:
     """
     Interface pLDDT against the rest of the model, as a histogram and a profile.
 
     pDockQ and pDockQ2 both average pLDDT over interface residues, so a low score
     has two very different causes: a globally uncertain protein, or a confident
-    protein with an uncertain interface. The left panel separates them; the right
-    panel says *where* the uncertain residues are, in AlphaFold's own colours.
+    protein with an uncertain interface. The upper panel separates them; the
+    lower panel says *where* the uncertain residues are, in AlphaFold's own
+    colours.
+
+    The two panels are **stacked, not side by side**. They are two independent
+    views of the same residues rather than one figure read across, so neither
+    needs to sit beside the other, and the lower one is a per-residue track whose
+    readability is purely a matter of pixels per residue: side by side it got
+    half of a figure that the output area then scaled to 43%, and stacked it gets
+    the full column. See `PLDDT_FIGSIZE` for the sizing.
 
     Args:
         contacts: Interface contacts of one ordered chain pair.
@@ -7751,8 +7816,8 @@ def plot_plddt_distribution(
     if_plddt = np.concatenate([plddt_x[contacts.mask_x], plddt_y[contacts.mask_y]])
     ni_plddt = np.concatenate([plddt_x[~contacts.mask_x], plddt_y[~contacts.mask_y]])
 
-    fig = Figure(figsize=figsize)
-    axes = fig.subplots(1, 2)
+    fig = Figure(figsize=figsize, layout='constrained')
+    axes = fig.subplots(2, 1, height_ratios=list(PLDDT_PANEL_RATIOS))
 
     ax = axes[0]
     bins = np.linspace(0, 100, 26)
@@ -7790,9 +7855,8 @@ def plot_plddt_distribution(
     ]
     legend_patches.append(
         mpatches.Patch(color=COLOUR_IF, alpha=0.5, label='Interface region'))
-    ax2.legend(handles=legend_patches, fontsize=8, loc='lower right')
+    ax2.legend(handles=legend_patches, fontsize=8, loc='lower right', ncol=2)
 
-    fig.tight_layout()
     return fig
 
 
@@ -8123,11 +8187,20 @@ def plot_threshold_margins(
 # notebook currently spells all of these inline; naming them here is what makes
 # R070-R074 edits to *this list* rather than edits inside the builders.
 
-MVS_VIEW_WIDTH: int = 950
-"""Default viewer width in pixels. Fits a notebook cell at the usual zoom."""
+MVS_VIEW_WIDTH: str | int = "100%"
+"""Default viewer width: a CSS length, or an `int` read as pixels.
 
-MVS_VIEW_HEIGHT: int = 600
-"""Default viewer height in pixels."""
+`'100%'` so the viewer fills whatever column it is rendered into, rather than
+being clipped on a narrow screen and stranded in white space on a wide one. Was
+`950` px, which is a guess at one particular window. Pass `width=` to
+`show_mol_view` to override per call."""
+
+MVS_VIEW_HEIGHT: str | int = 600
+"""Default viewer height: a CSS length, or an `int` read as pixels.
+
+**Stays a pixel value.** An iframe in normal document flow has no height to take
+a percentage *of*, so `'100%'` collapses it to nothing. Only the width can be
+made responsive."""
 
 MVS_CONTEXT_COLOUR: str = "#BDBDBD"
 """Mid grey. The whole-complex cartoon behind View 3's coloured interface, dark
@@ -9068,11 +9141,76 @@ def _new_structure(source: StructureSource) -> Tuple[Any, Any]:
 
 # -- the display helper -----------------------------------------------------
 
+def _css_length(value: "str | int | float") -> str:
+    """
+    A CSS length from either a number of pixels or an already-written length.
+
+    Example
+    -------
+    >>> _css_length(600), _css_length('100%'), _css_length('40vh')
+    ('600px', '100%', '40vh')
+    """
+    if isinstance(value, str):
+        return value
+    return f"{value:g}px"
+
+
+def mol_view_html(
+    state: Any,
+    label: str,
+    width: "str | int" = MVS_VIEW_WIDTH,
+    height: "str | int" = MVS_VIEW_HEIGHT,
+) -> str:
+    """
+    The label-plus-iframe HTML `show_mol_view` displays. Returned, not shown.
+
+    Split out from `show_mol_view` so the markup can be asserted on without a
+    running kernel, and so a caller that is composing its own HTML can embed a
+    viewer rather than display one.
+
+    The iframe carries its size in an inline `style` rather than in the `width` /
+    `height` attributes. Those attributes are only presentational hints, which
+    any host stylesheet rule outranks; an inline style outranks the stylesheet,
+    so `width:100%` survives whatever the notebook front end does to the output
+    area. `display:block` drops the inline-element baseline gap under the frame.
+
+    Args:
+        state:  A MolViewSpec `State`, from any `build_*_view` function.
+        label:  Caption drawn above the viewer.
+        width:  CSS length, or an `int` read as pixels. Defaults to
+                `MVS_VIEW_WIDTH`, i.e. the full width of the column.
+        height: CSS length, or an `int` read as pixels. Keep this a pixel value:
+                see `MVS_VIEW_HEIGHT`.
+
+    Returns:
+        One `<div>` caption followed by one `<iframe>`.
+
+    Example
+    -------
+    >>> class _S:
+    ...     def molstar_html(self): return '<b>hi</b>'
+    >>> markup = mol_view_html(_S(), 'View 1')
+    >>> 'style="width:100%; height:600px;' in markup
+    True
+    >>> 'src="data:text/html;base64,PGI+aGk8L2I+"' in markup
+    True
+    >>> 'width:950px' in mol_view_html(_S(), 'View 1', width=950)
+    True
+    """
+    encoded = base64.b64encode(state.molstar_html().encode()).decode()
+    return (
+        f'<div style="margin:10px 0 4px; font-weight:bold;">{label}</div>'
+        f'<iframe src="data:text/html;base64,{encoded}" '
+        f'style="width:{_css_length(width)}; height:{_css_length(height)}; '
+        f'display:block; border:0;" allowfullscreen></iframe>'
+    )
+
+
 def show_mol_view(
     state: Any,
     label: str,
-    width: int = MVS_VIEW_WIDTH,
-    height: int = MVS_VIEW_HEIGHT,
+    width: "str | int" = MVS_VIEW_WIDTH,
+    height: "str | int" = MVS_VIEW_HEIGHT,
 ) -> None:
     """
     Render a MolViewSpec `State` inline, above a bold label.
@@ -9082,6 +9220,11 @@ def show_mol_view(
     as in classic Jupyter: none of the three agree on how a notebook-relative
     file URL resolves, and all three render a `data:` iframe.
 
+    The markup comes from `mol_view_html`, which is where the responsive sizing
+    is explained. `IPython.display.IFrame` is deliberately not used: it writes
+    the size into the `width` / `height` *attributes*, which a host stylesheet
+    can override, and it offers no way to add an inline style.
+
     The only function in this section that touches `IPython`, so every builder
     stays usable head-lessly. `IPython` is imported lazily here for the same
     reason `molviewspec` is: the module must import outside a notebook.
@@ -9089,18 +9232,15 @@ def show_mol_view(
     Args:
         state:  A MolViewSpec `State`, from any `build_*_view` function.
         label:  Caption drawn above the viewer.
-        width:  Iframe width in pixels.
-        height: Iframe height in pixels.
+        width:  CSS length, or an `int` read as pixels; `'100%'` by default.
+        height: CSS length, or an `int` read as pixels.
 
     Returns:
         `None`. Displays as a side effect; this is the one function here that does.
     """
-    from IPython.display import HTML, IFrame, display
+    from IPython.display import HTML, display
 
-    html = state.molstar_html()
-    encoded = base64.b64encode(html.encode()).decode()
-    display(HTML(f'<div style="margin:10px 0 4px; font-weight:bold;">{label}</div>'))
-    display(IFrame(src=f'data:text/html;base64,{encoded}', width=width, height=height))
+    display(HTML(mol_view_html(state, label, width=width, height=height)))
 
 
 # -- View 1: chain overview -------------------------------------------------
@@ -9705,3 +9845,1121 @@ def pdockq2_agreement_legend(
         unlit_label=MVS_UNLIT_LABELS['pdockq2_agreement'],
     )
 
+
+# ---------------------------------------------------------------------------
+# Notebook orchestration (R100)
+# ---------------------------------------------------------------------------
+# Everything below is plumbing the notebook used to spell out inline: the
+# environment banner, the upload widgets, the download narration, and one
+# `format_*` per printed block. None of it computes a score. It lives here for
+# the same reason the figures do -- a reader of the notebook should see *which*
+# function is called with *what* data, and not the twenty lines of `print` that
+# lay the answer out.
+#
+# The rule that decides what moves. A cell keeps the call and the arguments,
+# because that is the teaching content: `compute_pdockq2(contacts, pair,
+# plddt_x, plddt_y)` says exactly which four things pDockQ2 is made of. A cell
+# gives up its formatting, because "%.4f in a column of width 12" teaches
+# nothing. No print was deleted in the move; every number the notebook used to
+# explain, it still explains, from here.
+#
+# One thing deliberately did *not* move: the notebook's bootstrap cell. Its job
+# is to make this module importable, so it cannot call this module to do it.
+# What it can hand over is everything that happens *after* the import succeeds,
+# which is `prepare_environment` below.
+
+
+# -- the bootstrap's second half --------------------------------------------
+
+def describe_checkout(root: "str | Path") -> str:
+    """
+    `'branch @ sha'` for a git checkout, or a plain note when it is not one.
+
+    Args:
+        root: Directory to describe.
+
+    Returns:
+        `'<branch> @ <short sha>'`, or `'unknown (not a git checkout)'` when
+        `git` is absent, fails, or `root` is not a work tree.
+
+    Example
+    -------
+    >>> describe_checkout('/definitely/not/a/checkout')
+    'unknown (not a git checkout)'
+    """
+    try:
+        rev = subprocess.run(['git', '-C', str(root), 'rev-parse', '--abbrev-ref', 'HEAD'],
+                             capture_output=True, text=True)
+        sha = subprocess.run(['git', '-C', str(root), 'rev-parse', '--short', 'HEAD'],
+                             capture_output=True, text=True)
+        if rev.returncode == 0 and sha.returncode == 0:
+            return f'{rev.stdout.strip()} @ {sha.stdout.strip()}'
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return 'unknown (not a git checkout)'
+
+
+def prepare_environment(
+    repo_root: "str | Path",
+    branch: str = "",
+    colab: bool = False,
+    install_missing: Optional[bool] = None,
+) -> str:
+    """
+    Finish the bootstrap: ensure `molviewspec`, then say where everything came from.
+
+    Called by the notebook's first cell immediately after the import succeeds.
+    Splitting it here is what keeps that cell down to the part that genuinely
+    cannot use this module: finding or creating a checkout.
+
+    `molviewspec` powers the optional 3D views. It is installed only when it is
+    genuinely missing *and* only on Colab: locally it comes from the environment,
+    and a `pip` call on every run is pure latency. A failed install is not fatal
+    -- Section 6 says it is unavailable and every score is unaffected.
+
+    Args:
+        repo_root:       The checkout in use, for the banner.
+        branch:          Branch the notebook expects, for the banner. Blank omits
+                         the line.
+        colab:           Whether this is Google Colab. Gates the install.
+        install_missing: Overrides that gate. `None` means "install iff `colab`".
+
+    Returns:
+        The revision string, as `describe_checkout` reports it.
+
+    Note:
+        Prints the banner as a side effect; that is the point of calling it.
+    """
+    if install_missing is None:
+        install_missing = colab
+
+    if not molviewspec_available() and install_missing:
+        print('Installing molviewspec ...')
+        subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', 'molviewspec'],
+                       check=False)
+        importlib.invalidate_caches()
+
+    revision = describe_checkout(repo_root)
+    print(f'Environment: {"Colab" if colab else "local"}')
+    print(f'Repo root:   {repo_root}')
+    print(f'Revision:    {revision}')
+    if branch:
+        print(f'Branch expected: {branch}')
+    print('molviewspec: ' + ('available' if molviewspec_available()
+                             else 'not installed (Section 6 will be skipped)'))
+    return revision
+
+
+# -- Section 1: where the three documents come from --------------------------
+
+@dataclass
+class UploadPanel:
+    """
+    The three `USE_LOCAL_FILE` upload slots, or an empty stand-in when online.
+
+    All three slots are required, not one plus two optionals (R025): six of the
+    seven values are read off the PAE matrix and the seventh, pDockQ, needs
+    per-residue pLDDT, so a partial upload leaves the traffic light with nothing
+    to colour. `load_documents` refuses a partial upload by name.
+
+    Attributes:
+        enabled: `True` in local-file mode. `False` leaves all three slots `None`.
+        cif:     `ipywidgets.FileUpload` for the mmCIF, or `None`.
+        pae:     `FileUpload` for the PAE JSON, or `None`.
+        plddt:   `FileUpload` for the pLDDT JSON, or `None`.
+    """
+
+    enabled: bool
+    cif: Any = None
+    pae: Any = None
+    plddt: Any = None
+
+    @property
+    def slots(self) -> Tuple[Tuple[str, Any], ...]:
+        """`(label, widget)` for the three slots, in the order they are printed."""
+        return (('mmCIF', self.cif), ('PAE  ', self.pae), ('pLDDT', self.plddt))
+
+    @staticmethod
+    def content(widget: Any) -> Optional[bytes]:
+        """
+        Bytes from a `FileUpload` widget, or `None` if nothing was uploaded.
+
+        Example
+        -------
+        >>> UploadPanel.content(None) is None
+        True
+        """
+        if widget is None or not widget.value:
+            return None
+        return bytes(widget.value[0]['content'])
+
+    @staticmethod
+    def filename(widget: Any) -> str:
+        """
+        The uploaded file's name, or a marker saying the slot is empty.
+
+        Example
+        -------
+        >>> UploadPanel.filename(None)
+        '(not uploaded)'
+        """
+        if widget is None or not widget.value:
+            return '(not uploaded)'
+        return widget.value[0]['name']
+
+
+UPLOAD_INSTRUCTIONS: str = (
+    '<b>Upload all three files, then run the next cell.</b><br>'
+    'All three are required: the PAE matrix supplies six of the seven '
+    'scores, and per-residue pLDDT supplies the seventh.<br>'
+    'For an AFDB model they are the <code>cifUrl</code>, '
+    '<code>paeDocUrl</code> and <code>plddtDocUrl</code> downloads: '
+    '<code>&hellip;-model_v1.cif</code>, '
+    '<code>&hellip;-predicted_aligned_error_v1.json</code> and '
+    '<code>&hellip;-confidence_v1.json</code>.'
+)
+"""What sits above the three upload slots, naming the AFDB file each one wants."""
+
+
+def local_upload_panel(enabled: bool) -> UploadPanel:
+    """
+    Build and display the three upload slots, or say that we are fetching online.
+
+    Args:
+        enabled: The notebook's `USE_LOCAL_FILE`.
+
+    Returns:
+        An `UploadPanel`. When `enabled` is `False` it holds no widgets, and
+        `load_documents` will download instead.
+
+    Note:
+        Displays as a side effect. `ipywidgets` and `IPython` are imported lazily,
+        so importing this module outside a notebook stays free.
+
+    Example
+    -------
+    >>> panel = local_upload_panel(False)
+    Online mode: files will be downloaded from AFDB.
+    >>> panel.enabled, panel.cif
+    (False, None)
+    """
+    if not enabled:
+        print('Online mode: files will be downloaded from AFDB.')
+        return UploadPanel(enabled=False)
+
+    import ipywidgets as widgets
+    from IPython.display import display
+
+    panel = UploadPanel(
+        enabled=True,
+        cif=widgets.FileUpload(accept='.cif,.mmcif', multiple=False,
+                               description='mmCIF (required)'),
+        pae=widgets.FileUpload(accept='.json', multiple=False,
+                               description='PAE JSON (required)'),
+        plddt=widgets.FileUpload(accept='.json', multiple=False,
+                                 description='pLDDT JSON (required)'),
+    )
+    display(widgets.VBox([widgets.HTML(UPLOAD_INSTRUCTIONS),
+                          panel.cif, panel.pae, panel.plddt]))
+    return panel
+
+
+LOCAL_MODE_GATE_NOTE: str = (
+    'No metadata to check, so the declared-assembly gate is skipped here. '
+    'The\nstructural gate inside verify_chain_identity still runs, and is '
+    'what refuses a\nmonomer or a model with more than two chains.'
+)
+"""Printed in local-file mode in place of the declared-assembly gate.
+
+With no metadata there is nothing for that gate to read, so local-file mode
+passes only one of the two. The one it passes is the structural gate inside
+`verify_chain_identity`, which is the authoritative one: it reads the chains
+themselves, and a monomer or a three-chain upload is refused there either way."""
+
+
+def fetch_prediction(
+    accession: str,
+    online: bool = True,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> Optional[AFDBPrediction]:
+    """
+    Fetch the AFDB metadata for `accession`, narrating what it did.
+
+    The URL is printed *before* the request, so a refused accession shows what
+    was asked for as well as why it failed.
+
+    Args:
+        accession: AFDB accession, e.g. `'AF-0000000065889468'`.
+        online:    `False` (the notebook's `USE_LOCAL_FILE`) skips the API
+                   entirely and returns `None`.
+        timeout:   Per-request timeout, in seconds.
+
+    Returns:
+        An `AFDBPrediction`, or `None` in local-file mode.
+
+    Raises:
+        AccessionLookupError: Propagated from `fetch_afdb_metadata`.
+
+    Example
+    -------
+    >>> fetch_prediction('AF-x', online=False) is None
+    Local file mode: skipping AFDB API for AF-x
+    No metadata to check, so the declared-assembly gate is skipped here. The
+    structural gate inside verify_chain_identity still runs, and is what refuses a
+    monomer or a model with more than two chains.
+    True
+    """
+    if not online:
+        print(f'Local file mode: skipping AFDB API for {accession}')
+        print(LOCAL_MODE_GATE_NOTE)
+        return None
+
+    print(f'Fetching: {AFDB_PREDICTION_URL.format(accession=accession)}')
+    prediction = fetch_afdb_metadata(accession, timeout=timeout)
+    # One entry per chain, and the endpoint's order is non-deterministic: the
+    # same accession answers ['A', 'B'] on one call and ['B', 'A'] on the next.
+    # `AFDBPrediction` sorts the entries by chain id at construction and every
+    # field is read by chain id, so nothing indexes an entry by position.
+    print(f'Chains described: {list(prediction.chain_ids)}')
+    print('Available fields:', sorted({field_name
+                                       for chain in prediction.chain_ids
+                                       for field_name in prediction.entry_for_chain(chain)}))
+    return prediction
+
+
+class SourceDocuments(NamedTuple):
+    """
+    The three documents every later cell reads, however they were obtained.
+
+    Attributes:
+        cif_text: mmCIF text, for `parse_structure`.
+        pae:      Parsed PAE JSON, for `parse_pae`.
+        plddt:    Parsed pLDDT JSON, for `parse_plddt`.
+    """
+
+    cif_text: str
+    pae: Any
+    plddt: Any
+
+
+def load_documents(
+    prediction: Optional[AFDBPrediction],
+    uploads: Optional[UploadPanel] = None,
+    accession: str = "",
+    timeout: float = DEFAULT_TIMEOUT,
+) -> SourceDocuments:
+    """
+    Get the mmCIF, PAE and pLDDT documents, by download or from the upload slots.
+
+    Which path is taken is decided by `uploads.enabled`, i.e. by the notebook's
+    `USE_LOCAL_FILE`, not by whether `prediction` happens to be `None`.
+
+    Each download URL is printed before its request, so a partial failure names
+    the document that failed rather than only the exception.
+
+    Args:
+        prediction: Fetched metadata. Required unless `uploads.enabled`.
+        uploads:    The `UploadPanel` from `local_upload_panel`.
+        accession:  Accession, used only in the missing-document message.
+        timeout:    Per-request timeout, in seconds.
+
+    Returns:
+        A `SourceDocuments`, unpackable as `cif_text, pae_raw, plddt_raw`.
+
+    Raises:
+        MissingLocalDocumentError: If local-file mode is on and any of the three
+            slots is empty. Every missing file is named at once, while the upload
+            widget is still on screen.
+        ValueError: If online mode was asked for without metadata to download from.
+    """
+    if uploads is not None and uploads.enabled:
+        cif_bytes = UploadPanel.content(uploads.cif)
+        pae_bytes = UploadPanel.content(uploads.pae)
+        plddt_bytes = UploadPanel.content(uploads.plddt)
+        for label, widget in uploads.slots:
+            print(f'{label} : {UploadPanel.filename(widget)}')
+        # R025. This used to print "PAE file not uploaded -- PAE-dependent
+        # analyses will be skipped" and then skip nothing. There is no useful
+        # partial run to skip *to*, so the honest answer is to refuse here.
+        require_local_documents(cif_bytes, pae_bytes, plddt_bytes, accession=accession)
+        documents = SourceDocuments(
+            cif_text=cif_bytes.decode('utf-8', errors='replace'),
+            pae=json.loads(pae_bytes),
+            plddt=json.loads(plddt_bytes),
+        )
+        print('All three local files loaded.')
+        return documents
+
+    if prediction is None:
+        raise ValueError(
+            'load_documents needs either fetched metadata or an enabled '
+            'UploadPanel; it was given neither.'
+        )
+
+    print(f'Downloading mmCIF: {prediction.cif_url}')
+    cif_text = download_structure(prediction, timeout=timeout)
+    print(f'Downloading PAE:   {prediction.pae_url}')
+    pae_raw = download_pae(prediction, timeout=timeout)
+    print(f'Downloading pLDDT: {prediction.plddt_url}')
+    plddt_raw = download_plddt(prediction, timeout=timeout)
+    print('All downloads complete.')
+    return SourceDocuments(cif_text=cif_text, pae=pae_raw, plddt=plddt_raw)
+
+
+# -- Section 1: what the documents turned out to contain ---------------------
+
+def format_chain_lengths(chains: Mapping[str, ChainCoords]) -> str:
+    """
+    The chains the mmCIF parse found, and how long each one is.
+
+    Args:
+        chains: `parse_structure` output.
+
+    Returns:
+        One header line plus one indented line per chain, sorted by chain id.
+
+    Example
+    -------
+    >>> coords = np.zeros((3, 3))
+    >>> ids = np.array([1, 2, 3])
+    >>> names = np.array(['ALA', 'GLY', 'SER'])
+    >>> chains = {'B': ChainCoords('B', coords, ids, names, None),
+    ...           'A': ChainCoords('A', coords[:2], ids[:2], names[:2], None)}
+    >>> print(format_chain_lengths(chains))
+    Chains found: ['A', 'B']
+      Chain A: 2 residues
+      Chain B: 3 residues
+    """
+    chain_ids = sorted(chains)
+    lines = [f'Chains found: {chain_ids}']
+    lines += [f'  Chain {cid}: {chains[cid].n_residues} residues' for cid in chain_ids]
+    return '\n'.join(lines)
+
+
+def format_chain_report(
+    identity: ChainIdentity,
+    pair: ChainPairPAE,
+    plddt_x: np.ndarray,
+    plddt_y: np.ndarray,
+    label_x: "Optional[str | ChainLabel]" = None,
+    label_y: "Optional[str | ChainLabel]" = None,
+    pae_shape: "Optional[Tuple[int, ...]]" = None,
+) -> str:
+    """
+    What the three documents agreed the chains are, and how the PAE splits up.
+
+    Three sources describe the chains -- the mmCIF, the PAE document and the
+    pLDDT document -- and every quadrant slice assumes all three agree. This is
+    the report of the check that established it, followed by the four quadrant
+    shapes that check makes safe to take.
+
+    Args:
+        identity:  `verify_chain_identity` result.
+        pair:      The ordered chain pair the notebook goes on to score.
+        plddt_x:   `(nx,)` pLDDT for `pair.chain_x`.
+        plddt_y:   `(ny,)` pLDDT for `pair.chain_y`.
+        label_x:   Display name for `chain_x`.
+        label_y:   Display name for `chain_y`.
+        pae_shape: Shape of the full PAE matrix. Omit it to derive the square
+                   `(nx + ny, nx + ny)` from the pair.
+
+    Returns:
+        The multi-line report, ending with the two mean pLDDT values.
+    """
+    name_x = _chain_label(pair.chain_x, label_x)
+    name_y = _chain_label(pair.chain_y, label_y)
+    total = pair.nx + pair.ny
+    shape = tuple(pae_shape) if pae_shape is not None else (total, total)
+
+    lines = [identity.assembly.headline, '',
+             'Chains verified across structure, PAE and pLDDT:',
+             identity.legend()]
+    lines += [f'NOTE: {note}' for note in identity.notes]
+    lines += ['',
+              f'PAE matrix shape: {shape}',
+              'PAE quadrants:',
+              f'  intra {name_x}: {pair.block_xx.shape}',
+              f'  inter {name_x} → {name_y}: {pair.block_xy.shape}',
+              f'  inter {name_y} → {name_x}: {pair.block_yx.shape}',
+              f'  intra {name_y}: {pair.block_yy.shape}',
+              f'pLDDT mean: {name_x} {np.asarray(plddt_x).mean():.1f}, '
+              f'{name_y} {np.asarray(plddt_y).mean():.1f}']
+    return '\n'.join(lines)
+
+
+# -- Section 2: the interface ------------------------------------------------
+
+def format_interface_report(
+    contacts: InterfaceContacts,
+    label_x: "Optional[str | ChainLabel]" = None,
+    label_y: "Optional[str | ChainLabel]" = None,
+    res_ids_x: Optional[np.ndarray] = None,
+    res_ids_y: Optional[np.ndarray] = None,
+) -> str:
+    """
+    Contact cutoff, contact count, and how much of each chain is at the interface.
+
+    Both chains, not just the first: for a heterodimer the two coverage figures
+    are genuinely different numbers, and reporting one of them was only ever
+    harmless while the chains were copies of each other.
+
+    Args:
+        contacts:  `detect_interface` result.
+        label_x:   Display name for `chain_x`.
+        label_y:   Display name for `chain_y`.
+        res_ids_x: Optional `(nx,)` residue numbers for `chain_x`. Supplying them
+                   adds the interface residue range, in the model's own numbering
+                   rather than in positional indices.
+        res_ids_y: Optional `(ny,)` residue numbers for `chain_y`.
+
+    Returns:
+        Four lines, plus one range line per chain that has residue numbers and at
+        least one interface residue.
+    """
+    name_x = _chain_label(contacts.chain_x, label_x)
+    name_y = _chain_label(contacts.chain_y, label_y)
+    nx, ny = contacts.contact_mask.shape
+
+    lines = [f'Contact cutoff         : {contacts.dist_cutoff} Å (CB-CB; CA for GLY)',
+             f'Number of contact pairs: {contacts.n_contact_pairs}']
+    for name, n_if, n_total in ((name_x, contacts.n_interface_residues_x, nx),
+                                (name_y, contacts.n_interface_residues_y, ny)):
+        lines.append(f'Interface residues, {name}: {n_if} / {n_total} '
+                     f'({100 * n_if / n_total:.1f}%)')
+
+    for name, res_ids, mask in ((name_x, res_ids_x, contacts.mask_x),
+                                (name_y, res_ids_y, contacts.mask_y)):
+        if res_ids is None:
+            continue
+        if_res = np.asarray(res_ids)[mask]
+        if if_res.size:
+            lines.append(f'Interface residue range, {name}: {if_res[0]} – {if_res[-1]}')
+    return '\n'.join(lines)
+
+
+# -- Section 3: which PAE cells each score reads -----------------------------
+
+def format_score_mask_usage(
+    pair: ChainPairPAE,
+    contacts: InterfaceContacts,
+    pae_cutoff: float = PAE_CUTOFF,
+    lis_cutoff: float = LIS_CUTOFF,
+    label_x: "Optional[str | ChainLabel]" = None,
+    label_y: "Optional[str | ChainLabel]" = None,
+) -> str:
+    """
+    How many cells of the inter-chain PAE block each score actually reads.
+
+    The same `score_masks` the four panels of `plot_pae_score_masks` are drawn
+    from, counted rather than drawn, so the figure and the numbers beside it
+    cannot disagree.
+
+    Args:
+        pair:       The ordered chain pair.
+        contacts:   Interface contacts of the same pair.
+        pae_cutoff: ipSAE's PAE cutoff.
+        lis_cutoff: LIS's PAE cutoff.
+        label_x:    Display name for `chain_x`.
+        label_y:    Display name for `chain_y`.
+
+    Returns:
+        A header naming the block and its slice, then one line per score.
+    """
+    name_x = _chain_label(pair.chain_x, label_x)
+    name_y = _chain_label(pair.chain_y, label_y)
+    masks = score_masks(pair, contacts, pae_cutoff=pae_cutoff, lis_cutoff=lis_cutoff)
+    block_cells = pair.block_xy.size
+    nx, ny = pair.nx, pair.ny
+
+    lines = [f'Cells of the {name_x} → {name_y} inter-chain block '
+             f'(pae_matrix[:{nx}, {nx}:{nx + ny}]) used by each score:']
+    for name, mask in masks.items():
+        n_cells = int(mask.sum())
+        lines.append(f'  {name:12s}: {n_cells:6d} cells '
+                     f'({100 * n_cells / block_cells:.1f}%)')
+    return '\n'.join(lines)
+
+
+# -- Section 4: one report per score -----------------------------------------
+# Each of these is the print block that used to sit under the `compute_*` call
+# in its own notebook cell, moved verbatim. The cell keeps the call, because the
+# arguments are what the section is teaching; it gives up the formatting.
+
+def _threshold_line(label: str, score_name: str, both_provenances: bool = False) -> str:
+    """One `threshold : green >= g, amber >= a (provenance)` line, aligned to `label`."""
+    threshold = THRESHOLDS[score_name]
+    if both_provenances:
+        return (f'  {label}: green ≥ {threshold.green} '
+                f'({threshold.green_provenance}), '
+                f'amber ≥ {threshold.amber} ({threshold.amber_provenance})')
+    return (f'  {label}: green ≥ {threshold.green}, '
+            f'amber ≥ {threshold.amber} ({threshold.green_provenance})')
+
+
+def format_iptm_report(
+    result: DirectionalPair,
+    label_x: "Optional[str | ChainLabel]" = None,
+    label_y: "Optional[str | ChainLabel]" = None,
+    full_x: str = "",
+    full_y: str = "",
+    res_ids_x: Optional[np.ndarray] = None,
+    res_ids_y: Optional[np.ndarray] = None,
+) -> str:
+    """
+    Section 4.1: ipTM_d0chn, its `d0`, its peak residue in each direction.
+
+    Opens with the ordered pair itself, because 4.1 is the first subsection and
+    every "x -> y" label in Section 4 reads against that order.
+
+    Args:
+        result:    `compute_iptm_d0chn` output.
+        label_x:   Compact display name for `chain_x`.
+        label_y:   Compact display name for `chain_y`.
+        full_x:    Full name for `chain_x`, for the ordered-pair header. Blank
+                   omits the header.
+        full_y:    Full name for `chain_y`.
+        res_ids_x: Optional `(nx,)` residue numbers, so the peak is named by the
+                   model's own residue number and not only by an index.
+        res_ids_y: Optional `(ny,)` residue numbers.
+
+    Returns:
+        The multi-line report.
+    """
+    name_x = _chain_label(result.chain_x, label_x)
+    name_y = _chain_label(result.chain_y, label_y)
+    nx = int(result.forward.values.shape[0])
+    ny = int(result.reverse.values.shape[0])
+    _, band = traffic_light(result.score, 'iptm_d0chn')
+
+    lines: List[str] = []
+    if full_x or full_y:
+        lines += [f'Ordered pair: {name_x} → {name_y}',
+                  f'  {name_x} = {full_x}',
+                  f'  {name_y} = {full_y}',
+                  '']
+    lines += [f'ipTM_d0chn : {result.score:.4f}   [{band}]',
+              f'  d0chn                 : {result.d0:.4f} '
+              f'(from n0chn = {result.n0} = {nx} + {ny} residues)']
+    # The reported value is one residue's number, so name that residue.
+    for row, col, profile, res_ids in ((name_x, name_y, result.forward, res_ids_x),
+                                       (name_y, name_x, result.reverse, res_ids_y)):
+        index = profile.argmax_index
+        number = index if res_ids is None else np.asarray(res_ids)[index]
+        lines.append(f'  peak residue, {row} → {col}: {number} (index {index})')
+    lines.append(_threshold_line('threshold             ', 'iptm_d0chn'))
+    return '\n'.join(lines)
+
+
+def format_ipsae_report(result: IPSAEResult) -> str:
+    """
+    Section 4.2: the three ipSAE variants, their three `d0` values, and the ordering.
+
+    `d0chn >= d0dom >= d0res` is a theorem, not a measurement, so it is checked
+    here rather than left for the reader to notice. It is *reported* rather than
+    asserted: a violation would mean the computation is wrong, not the model, and
+    that is worth seeing next to the numbers rather than as a traceback.
+
+    Args:
+        result: `compute_ipsae` output.
+
+    Returns:
+        The multi-line report.
+    """
+    lines = [f'PAE cutoff: {result.pae_cutoff:.0f} Å (strict <)', '']
+    for key, variant in result.variants.items():
+        _, band = traffic_light(variant.score, key)
+        lines.append(f'  {SCORE_DISPLAY_NAMES[key]:12s}: {variant.score:.4f}   [{band}]')
+
+    # The d0 values are the point of the exercise: same PAE cells, three scales.
+    lines += ['',
+              f'  d0chn : {result.d0chn_value:.4f}  (n0chn = {result.n0chn})',
+              f'  d0dom : {result.d0dom.d0:.4f}  (n0dom = {result.d0dom.n0}, '
+              'of the direction that supplied the reported value)',
+              f'  d0res : {result.d0res.d0:.4f}  (n0res = {result.d0res.n0}, '
+              'of the peak residue alone)']
+
+    ordered = (result.d0chn.score >= result.d0dom.score - 1e-6
+               and result.d0dom.score >= result.d0res.score - 1e-6)
+    lines += ['',
+              '  ordering d0chn ≥ d0dom ≥ d0res : '
+              + ('holds' if ordered else 'VIOLATED (this should be impossible)'),
+              '  d0chn - d0res spread          : '
+              f'{result.d0chn.score - result.d0res.score:+.4f}',
+              '  A wide spread means the confidently predicted interface is small',
+              '  relative to the two chains. Quote ipSAE_d0res.']
+    return '\n'.join(lines)
+
+
+def format_pdockq_report(result: PDockQResult) -> str:
+    """
+    Section 4.3: pDockQ, its two ingredients, and the symmetry check.
+
+    Args:
+        result: `compute_pdockq` output.
+
+    Returns:
+        The multi-line report.
+    """
+    _, band = traffic_light(result.score, 'pdockq')
+    return '\n'.join([
+        f'pDockQ : {result.score:.4f}   [{band}]',
+        f'  contact pairs (npairs) : {result.n_contact_pairs}   '
+        f'(CB-CB ≤ {result.dist_cutoff:.0f} Å)',
+        f'  interface residues     : {result.n_interface_residues}   '
+        '(counted once each; reported by ipsae.py but not used in the score)',
+        f'  mean interface pLDDT   : {result.mean_plddt:.2f}',
+        f'  x = mean_pLDDT × log10(npairs) : {result.x:.4f}',
+        f'  symmetric              : {result.symmetric} '
+        '(checked by computing both orientations, not assumed)',
+        _threshold_line('threshold              ', 'pdockq')
+        + '; sigmoid bounded on [0.018, 0.742]',
+    ])
+
+
+def format_pdockq2_report(
+    result: PDockQ2Result,
+    label_x: "Optional[str | ChainLabel]" = None,
+    label_y: "Optional[str | ChainLabel]" = None,
+) -> str:
+    """
+    Section 4.4: pDockQ2, both directions, and the ingredient pDockQ does not have.
+
+    Args:
+        result:  `compute_pdockq2` output.
+        label_x: Display name for `chain_x`.
+        label_y: Display name for `chain_y`.
+
+    Returns:
+        The multi-line report.
+    """
+    name_x = _chain_label(result.chain_x, label_x)
+    name_y = _chain_label(result.chain_y, label_y)
+    winner = result.winning_direction
+    _, band = traffic_light(result.score, 'pdockq2')
+    return '\n'.join([
+        f'pDockQ2 : {result.score:.4f}   [{band}]',
+        f'  reported direction  : {winner.chain_row} → {winner.chain_col} '
+        '(the larger of the two)',
+        f'  {name_x} → {name_y} : {result.forward_score:.4f}      '
+        f'{name_y} → {name_x} : {result.reverse_score:.4f}      '
+        f'|Δ| {result.delta:.4f}',
+        f'  contact pairs       : {winner.n_contact_pairs}',
+        f'  mean_ptm (d0 = 10)  : {winner.mean_ptm:.4f}   '
+        '← the ingredient pDockQ does not have',
+        f'  mean interface pLDDT: {winner.mean_plddt:.2f}',
+        f'  x = mean_pLDDT × mean_ptm : {winner.x:.4f}',
+        _threshold_line('threshold           ', 'pdockq2', both_provenances=True)
+        + '; bounded on [0.005, 1.315], not a probability',
+    ])
+
+
+def format_lis_report(
+    result: LISResult,
+    label_x: "Optional[str | ChainLabel]" = None,
+    label_y: "Optional[str | ChainLabel]" = None,
+) -> str:
+    """
+    Section 4.5: LIS, both directions, and the size of the local interaction area.
+
+    The LIA is reported alongside the score because Kim 2024 p. 8 gives high LIS
+    over a very small LIA as a false-positive signature.
+
+    Args:
+        result:  `compute_lis` output.
+        label_x: Display name for `chain_x`.
+        label_y: Display name for `chain_y`.
+
+    Returns:
+        The multi-line report.
+    """
+    name_x = _chain_label(result.chain_x, label_x)
+    name_y = _chain_label(result.chain_y, label_y)
+    names = {result.chain_x: name_x, result.chain_y: name_y}
+    _, band = traffic_light(result.score, 'lis')
+
+    lines = [f'LIS : {result.score:.4f}   [{band}]   '
+             '(the MEAN of the two directions, not the max)',
+             f'  {name_x} → {name_y} : {result.forward_score:.4f}      '
+             f'{name_y} → {name_x} : {result.reverse_score:.4f}      '
+             f'|Δ| {result.delta:.4f}']
+    for direction in (result.forward, result.reverse):
+        lines.append(
+            f'  LIA, {names[direction.chain_row]} → {names[direction.chain_col]} : '
+            f'{direction.n_valid_pairs} of {direction.n_pairs} inter-chain cells '
+            f'below {result.lis_cutoff:.0f} Å '
+            f'({100 * direction.fraction_valid:.1f}%)')
+    lines.append(_threshold_line('threshold        ', 'lis', both_provenances=True))
+    return '\n'.join(lines)
+
+
+def format_score_values(scores: Mapping[str, float]) -> str:
+    """
+    Section 4.6: the seven collected values, one per line, under a rule.
+
+    Args:
+        scores: `{THRESHOLDS key: value}`.
+
+    Returns:
+        A leading blank line, the rule, then one line per score.
+
+    Example
+    -------
+    >>> print(format_score_values({'lis': 0.5, 'pdockq': 0.25}))
+    <BLANKLINE>
+    ── Score Results ──────────────────────────────
+      LIS               : 0.5000
+      pDockQ            : 0.2500
+    """
+    lines = ['', '── Score Results ──────────────────────────────']
+    lines += [f'  {SCORE_DISPLAY_NAMES[name]:18s}: {value:.4f}'
+              for name, value in scores.items()]
+    return '\n'.join(lines)
+
+
+def format_domain_sizes(
+    result: IPSAEResult,
+    label_x: "Optional[str | ChainLabel]" = None,
+    label_y: "Optional[str | ChainLabel]" = None,
+) -> str:
+    """
+    The per-direction `n0dom` and `d0dom` behind the directional report.
+
+    n0dom is the mechanism, not a separate finding: the domain size that sets
+    d0dom is itself counted per direction (R003), so the two d0dom columns of the
+    directional report are not the same measurement under two names.
+
+    Args:
+        result:  `compute_ipsae` output.
+        label_x: Display name for `chain_x`.
+        label_y: Display name for `chain_y`.
+
+    Returns:
+        A leading blank line, then the two lines.
+    """
+    name_x = _chain_label(result.chain_x, label_x)
+    name_y = _chain_label(result.chain_y, label_y)
+    return '\n'.join([
+        '',
+        f'  n0dom  {name_x} → {name_y}: {result.n0dom_xy}'
+        f'   {name_y} → {name_x}: {result.n0dom_yx}'
+        f'   |Δ| {result.n0dom_delta}',
+        f'  d0dom  {name_x} → {name_y}: {result.d0dom_xy:.4f}'
+        f'   {name_y} → {name_x}: {result.d0dom_yx:.4f}',
+    ])
+
+
+# -- Section 5: interface pLDDT ----------------------------------------------
+
+@dataclass(frozen=True)
+class InterfacePLDDT:
+    """
+    Interface pLDDT against the rest of the model, as numbers rather than a figure.
+
+    pDockQ and pDockQ2 both average pLDDT over interface residues, so a low score
+    has two very different causes: a globally uncertain protein, or a confident
+    protein with an uncertain interface. These are the numbers that separate them,
+    and the same values `plot_plddt_distribution` draws.
+
+    Attributes:
+        interface:     pLDDT of every interface residue, both chains pooled.
+        non_interface: pLDDT of every other residue.
+        low_cutoff:    The pLDDT below which a residue counts as low.
+    """
+
+    interface: np.ndarray
+    non_interface: np.ndarray
+    low_cutoff: float = 70.0
+
+    @property
+    def n_interface(self) -> int:
+        """Interface residues, both chains."""
+        return int(self.interface.shape[0])
+
+    @property
+    def n_low_interface(self) -> int:
+        """Interface residues below `low_cutoff`."""
+        return int((self.interface < self.low_cutoff).sum())
+
+    @property
+    def mean_interface(self) -> float:
+        """Mean interface pLDDT. This is pDockQ's `mean_plddt`."""
+        return float(self.interface.mean())
+
+
+def interface_plddt_stats(
+    contacts: InterfaceContacts,
+    plddt_x: np.ndarray,
+    plddt_y: np.ndarray,
+    low_cutoff: float = 70.0,
+) -> InterfacePLDDT:
+    """
+    Split both chains' pLDDT into interface and non-interface.
+
+    Args:
+        contacts:   `detect_interface` result.
+        plddt_x:    `(nx,)` pLDDT for `chain_x`.
+        plddt_y:    `(ny,)` pLDDT for `chain_y`.
+        low_cutoff: The "low pLDDT" line, 70 by AlphaFold's own convention.
+
+    Returns:
+        An `InterfacePLDDT`.
+
+    Example
+    -------
+    >>> contacts = detect_interface(
+    ...     ChainCoords('A', np.array([[0., 0., 0.], [50., 0., 0.]]),
+    ...                 np.array([1, 2]), np.array(['ALA', 'ALA']), None),
+    ...     ChainCoords('B', np.array([[1., 0., 0.], [60., 0., 0.]]),
+    ...                 np.array([1, 2]), np.array(['ALA', 'ALA']), None))
+    >>> stats = interface_plddt_stats(contacts, np.array([90.0, 40.0]),
+    ...                               np.array([50.0, 30.0]))
+    >>> stats.n_interface, stats.n_low_interface, round(stats.mean_interface, 1)
+    (2, 1, 70.0)
+    """
+    interface = np.concatenate([np.asarray(plddt_x)[contacts.mask_x],
+                                np.asarray(plddt_y)[contacts.mask_y]])
+    non_interface = np.concatenate([np.asarray(plddt_x)[~contacts.mask_x],
+                                    np.asarray(plddt_y)[~contacts.mask_y]])
+    return InterfacePLDDT(interface=interface, non_interface=non_interface,
+                          low_cutoff=low_cutoff)
+
+
+def format_plddt_stats(stats: InterfacePLDDT) -> str:
+    """
+    Interface against non-interface pLDDT, as the three lines above the figure.
+
+    Args:
+        stats: `interface_plddt_stats` result.
+
+    Returns:
+        Three lines.
+    """
+    n_if = max(stats.n_interface, 1)
+    return '\n'.join([
+        f'Interface pLDDT   mean={stats.interface.mean():.1f}, '
+        f'median={np.median(stats.interface):.1f}',
+        f'Non-interface     mean={stats.non_interface.mean():.1f}, '
+        f'median={np.median(stats.non_interface):.1f}',
+        f'Low-pLDDT (<{stats.low_cutoff:.0f}) interface residues: '
+        f'{stats.n_low_interface} / {stats.n_interface} '
+        f'({100 * stats.n_low_interface / n_if:.1f}%)',
+    ])
+
+
+# -- Sections 2 and 6: drawing the 3D views ----------------------------------
+
+MOLVIEWSPEC_NO_URL_MESSAGE: str = (
+    'Skipping the 3D views: Mol* downloads the structure itself, so local file '
+    'mode has no URL to hand it.\nThe contact map above, and every score in '
+    'this notebook, are unaffected.'
+)
+"""Why local-file mode draws no 3D views. Not a failure: Mol* fetches the
+structure from a URL and an already-parsed mmCIF string cannot be handed to it."""
+
+
+@dataclass(frozen=True)
+class ViewRenderer:
+    """
+    One resolved structure source, reused by every 3D view in the notebook.
+
+    Section 2 resolves the source once for View 1, and Section 6's Views 2 to 6
+    reuse the same object (R030), so the two sections cannot end up pointing Mol*
+    at different files. Each view is built lazily and its failures are caught per
+    view, so one broken viewer does not cost you the others.
+
+    Attributes:
+        source:  The structure Mol* downloads, or `None` when the 3D section
+                 cannot run. `view_renderer` has already said why.
+        label_x: Compact display name for the first chain, for view captions.
+        label_y: Compact display name for the second chain.
+    """
+
+    source: Optional[StructureSource]
+    label_x: str = ""
+    label_y: str = ""
+
+    @property
+    def available(self) -> bool:
+        """Whether any view can be drawn at all."""
+        return self.source is not None
+
+    def render(self, key: str, build: Any, legend: Optional[Any] = None) -> None:
+        """
+        Draw one view with its caption and legend, or say why it was skipped.
+
+        Args:
+            key:    A `MVS_VIEW_LABELS` key, which supplies the caption.
+            build:  `source -> State`. Called only if a source was resolved, so
+                    the builder never runs in an environment that cannot show it.
+            legend: `() -> Sequence[LegendEntry]`, rendered under the viewer.
+
+        Returns:
+            `None`. Displays as a side effect.
+        """
+        from IPython.display import HTML, display
+
+        label = format_view_label(key, self.label_x, self.label_y)
+        if self.source is None:
+            print(f'{label}\n  skipped: no structure source resolved above.')
+            return
+        try:
+            show_mol_view(build(self.source), label)
+            if legend is not None:
+                display(HTML(legend_html(legend())))
+        except Exception as exc:  # noqa: BLE001  (one bad view must not stop the rest)
+            print(f'{label} failed: {exc}')
+
+
+def view_renderer(
+    prediction: "Optional[AFDBPrediction | Mapping[str, Any]]",
+    label_x: str = "",
+    label_y: str = "",
+) -> ViewRenderer:
+    """
+    Resolve the structure Mol* will download, once, and say so if it cannot.
+
+    Three things can stop the 3D section, and each gets its own sentence rather
+    than a shared "unavailable": `molviewspec` is not installed, local-file mode
+    left no URL to hand Mol*, or the metadata carries no usable structure URL.
+
+    Args:
+        prediction: Fetched metadata, or `None` in local-file mode.
+        label_x:    Compact display name for the first chain.
+        label_y:    Compact display name for the second chain.
+
+    Returns:
+        A `ViewRenderer`, whose `.source` is `None` if any of the three applies.
+
+    Note:
+        Prints the reason as a side effect when there is one.
+
+    Example
+    -------
+    >>> renderer = view_renderer({'bcifUrl': 'https://x/y.bcif'}, 'A', 'B')
+    >>> renderer.available and renderer.source.format
+    'bcif'
+    """
+    if not molviewspec_available():
+        print(MOLVIEWSPEC_MISSING_MESSAGE)
+        return ViewRenderer(None, label_x, label_y)
+    if prediction is None:
+        print(MOLVIEWSPEC_NO_URL_MESSAGE)
+        return ViewRenderer(None, label_x, label_y)
+    try:
+        source = resolve_structure_source(prediction)
+    except ValueError as exc:
+        print(f'Skipping the 3D views: {exc}')
+        return ViewRenderer(None, label_x, label_y)
+    return ViewRenderer(source, label_x, label_y)
+
+
+def format_view_conventions(full_x: str = "", full_y: str = "") -> str:
+    """
+    The three cutoffs Section 6's views are painted against, stated once.
+
+    Views 3 to 6 all divide residues by the same two lines -- a contact distance
+    and an ipSAE_d0res level -- plus, for View 6, a contact-quality level. Saying
+    them once above the views keeps six legends from each restating them.
+
+    Args:
+        full_x: Full name of the first chain.
+        full_y: Full name of the second chain.
+
+    Returns:
+        Four lines, ASCII only: these sit above a Mol* iframe, and the notebook
+        keeps that block plain so it reads the same in every front end.
+
+    Example
+    -------
+    >>> print(format_view_conventions('P1 (A)', 'P1 (B)'))
+    Chains in these views: P1 (A); P1 (B)
+    Contact, Views 4, 5, 6:     CB within 8.0 A (CA for glycine)
+    Confident PAE, Views 4, 6:  ipSAE_d0res >= 0.60 (THRESHOLDS['ipsae_d0res'].amber, AFDB's release edge)
+    Well-placed contacts, V6:   mean contact ptm >= 0.50, i.e. mean contact PAE better than 10 A
+    """
+    contact_pae = contact_ptm_to_pae(MVS_CONTACT_PTM_THRESHOLD)
+    return '\n'.join([
+        f'Chains in these views: {full_x}; {full_y}',
+        f'Contact, Views 4, 5, 6:     CB within {DIST_CUTOFF:.1f} A '
+        '(CA for glycine)',
+        f'Confident PAE, Views 4, 6:  ipSAE_d0res >= '
+        f'{MVS_DISAGREEMENT_THRESHOLD:.2f} '
+        "(THRESHOLDS['ipsae_d0res'].amber, AFDB's release edge)",
+        f'Well-placed contacts, V6:   mean contact ptm >= '
+        f'{MVS_CONTACT_PTM_THRESHOLD:.2f}, i.e. mean contact PAE better '
+        f'than {contact_pae:.0f} A',
+    ])
+
+
+# -- Section 7: what closes the notebook -------------------------------------
+
+def format_interface_statistics(
+    contacts: InterfaceContacts,
+    plddt: InterfacePLDDT,
+    label_x: "Optional[str | ChainLabel]" = None,
+    label_y: "Optional[str | ChainLabel]" = None,
+    rule_width: int = 65,
+) -> str:
+    """
+    The physical facts about the interface, under the diagnostic prose.
+
+    Every number here was computed earlier in the notebook and is read back, not
+    recomputed: this block cannot disagree with the sections above it.
+
+    Args:
+        contacts:   `detect_interface` result.
+        plddt:      `interface_plddt_stats` result.
+        label_x:    Display name for `chain_x`.
+        label_y:    Display name for `chain_y`.
+        rule_width: Width of the closing rule.
+
+    Returns:
+        Six lines and the closing rule.
+    """
+    name_x = _chain_label(contacts.chain_x, label_x)
+    name_y = _chain_label(contacts.chain_y, label_y)
+    return '\n'.join([
+        'Interface statistics:',
+        f'  Contact pairs     : {contacts.n_contact_pairs}',
+        f'  Interface res, {name_x}: {contacts.n_interface_residues_x}',
+        f'  Interface res, {name_y}: {contacts.n_interface_residues_y}',
+        f'  Mean pLDDT (if)   : {plddt.mean_interface:.1f}',
+        f'  Low pLDDT (<{plddt.low_cutoff:.0f}) if: {plddt.n_low_interface} / '
+        f'{plddt.n_interface}',
+        '=' * rule_width,
+    ])
+
+
+def format_references() -> str:
+    """
+    Every source the notebook's numbers rest on, metric and threshold separately.
+
+    The citation policy is in the module docstring: a metric belongs to whoever
+    published it, and the ipSAE 0.6 cutoff and the four confidence bands are
+    AlphaFold DB's, not Dunbrack's. This block is that policy rendered.
+
+    Returns:
+        A leading blank line, then the reference block.
+
+    Example
+    -------
+    >>> print(format_references())      # doctest: +ELLIPSIS
+    <BLANKLINE>
+    References. The metric and its threshold are credited separately:
+      ipSAE metric    : Dunbrack (2025) biorxiv 2025.02.10.637595
+      ...
+      Background      : https://...
+    """
+    return '\n'.join([
+        '',
+        'References. The metric and its threshold are credited separately:',
+        '  ipSAE metric    : Dunbrack (2025) biorxiv 2025.02.10.637595',
+        '  pDockQ          : Bryant et al. (2022) Nat Commun s41467-022-28865-w',
+        '  pDockQ2 metric  : Zhu et al. (2023) Bioinformatics btad424',
+        '  LIS             : Kim et al. (2024) biorxiv 2024.02.19.580970',
+        '  ipSAE / pDockQ2 thresholds, bands and the joint release criterion:',
+        '                    Han, Tsenkov, Venanzi et al. (2026)',
+        '                    biorxiv 10.64898/2026.03.27.714458v2',
+        '  ipsae.py v4     : github.com/DunbrackLab/IPSAE',
+        f'  Background      : {AFDB_NEWS_URL}',
+    ])

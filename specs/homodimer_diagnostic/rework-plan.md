@@ -1868,6 +1868,44 @@ regime, and its `pDockQ` 0.687671 -> 0.68 is the single measurement proving AFDB
 `REPO_BRANCH = 'homodimer-notebook-rework'` behind `TODO(merge)`, and Colab is unverified.
 T041 records a recommendation of beta conditional on both, and says the decision is the user's.
 
+
+## Post-review refinements, 2026-09-09
+
+User review of the finished notebook produced five points. Two were questions answered without
+code change; three were changes, made as one pass because all three touch the notebook.
+
+**Answered, no change needed.**
+- *"Why is each chain named fabA?"* It is AFDB's `gene` field. Both chains carry it because
+  FX-001 is a homodimer, the same protein twice; the heterodimer shows `ISG20 (A)` and
+  `Sumo1 (B)`. The chain letter is always retained so a homodimer's chains stay distinct.
+- *"Do ipTM and ipSAE have a value for every residue, and is plotting them correct?"* Yes, and
+  yes. Row `i` of the inter-chain PAE block is residue `i`'s own measurement against the whole
+  partner chain, so `ipSAE_i = mean over valid j of ptm(PAE[i,j], d0)`, and the reported score
+  is the **max over that profile**. The starred peak the plot now marks *is* the number in
+  Section 7's table. `d0res` is explained in 4.2 with a three-row table contrasting the
+  variants. Already documented in cells 22 and 34.
+
+**Changes made.**
+1. **Section 5 stacked vertically.** `plot_plddt_distribution` was `(14, 5)` side by side, now
+   `(6.0, 5.4)` stacked, i.e. 900x810 px at dpi 150, exactly the budget M5 established as the
+   scrollbar threshold. Verified stacked by axes geometry (two distinct `y0`, shared `x0`).
+2. **Mol* viewers responsive.** `MVS_VIEW_WIDTH` is now `'100%'`, applied as a CSS
+   `style="width:100%; height:600px"` rather than an HTML `width` attribute, which is the
+   correct mechanism. Height stays a pixel value because a percentage height on an iframe in
+   document flow collapses to zero. Verified in executed output.
+3. **Further offload: 479 -> 215 non-comment code lines (-55%).** The bootstrap, which cannot
+   import from the module because its job is to make the module importable, came down 115 -> 75
+   rather than being left alone. Doctests rose 299 -> 324 as logic moved into tested functions.
+
+**All seven scores unchanged on all four fixtures**, checked against the validation report's
+recorded values. Notebook runs clean end to end, 19 figures and 6 responsive viewers.
+
+**Process note.** The agent making these changes stalled without reporting, after its edits had
+landed. The work was verified independently rather than re-run: JSON validity, execution,
+numerical identity against the validation report, doctests, and the geometry of both layout
+changes. A stalled agent is not the same as failed work, but it does mean nothing can be taken
+on trust.
+
 ## Milestones and execution order
 
 46 tasks in 8 milestones. Execution model, agreed with the user 2026-09-07: each task goes to
