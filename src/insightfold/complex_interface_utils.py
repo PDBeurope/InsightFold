@@ -1683,7 +1683,11 @@ def describe_assembly(
             return ""
         if labels is not None and chain_id in labels:
             label = labels[chain_id]
-            return str(label.gene or label.protein_name or label.entry_name or "")
+            # Same preference order as `ChainLabel.token`, for the same reason:
+            # the entry name distinguishes organism as well as protein, so it
+            # cannot make a human and a mouse orthologue look like one protein
+            # the way the bare gene symbols `SUMO1` and `Sumo1` can.
+            return str(label.entry_name or label.gene or label.protein_name or "")
         return ""
 
     # Ordered by first appearance in chain order, not alphabetically: chain
@@ -1777,12 +1781,87 @@ def describe_assembly(
 # `print` calls, so that "the same input renders the same text" is something a
 # caller can assert instead of something a reader has to eyeball.
 
-_REPORT_WIDTH: int = 59
-"""Rule width for `format_metadata_report`; sized to the longest protein name
-seen on the fixtures."""
+_REPORT_WIDTH: int = _ASSEMBLY_ROW_WIDTH
+"""Rule width for `format_metadata_report`.
+
+Tied to `_ASSEMBLY_ROW_WIDTH` rather than set independently: the assembly block
+is rendered by `AssemblyDescription.describe()`, which wraps at that width, so a
+narrower rule here was a rule the report's own content ran past. One constant,
+one width, no overhang."""
 
 _REPORT_LABEL_WIDTH: int = 14
 """Column width of the label before the `:` in the report."""
+
+_PLDDT_BANDS: Tuple[Tuple[str, str], ...] = (
+    ("very-high", "fractionPlddtVeryHigh"),
+    ("confident", "fractionPlddtConfident"),
+    ("low", "fractionPlddtLow"),
+    ("very-low", "fractionPlddtVeryLow"),
+)
+"""AFDB's four pLDDT confidence bands and the metadata field carrying each
+band's fraction of the chain. Printed in descending confidence, which is the
+order AFDB's own colour key uses. Hyphenated rather than spaced so that the
+report's wrapper, which does not break on hyphens, cannot split a band name
+across two lines and leave a stray "low" heading a line."""
+
+
+def _modelled_span(prediction: AFDBPrediction, chain_id: str) -> str:
+    """
+    Which part of the UniProt sequence this chain is, and how old that sequence is.
+
+    Worth a row because every length-normalised score in this notebook is scaled
+    to what was *modelled*: `d0` is a function of chain length, so a fragment and
+    the whole protein do not produce comparable numbers even for the same
+    accession. `uniprotStart`/`uniprotEnd` and `sequenceStart`/`sequenceEnd` are
+    printed against each other rather than one being taken as both, because a
+    disagreement between them means the model's residue numbering is not
+    UniProt's and every residue number in this notebook would need translating.
+    """
+    u_start = prediction.chain_field(chain_id, "uniprotStart", default=None)
+    u_end = prediction.chain_field(chain_id, "uniprotEnd", default=None)
+    s_start = prediction.chain_field(chain_id, "sequenceStart", default=None)
+    s_end = prediction.chain_field(chain_id, "sequenceEnd", default=None)
+    if u_start is None or u_end is None:
+        u_start, u_end = s_start, s_end
+    if u_start is None or u_end is None:
+        return ""
+
+    span = f"UniProt residues {u_start}-{u_end}"
+    total = len(str(prediction.chain_field(chain_id, "uniprotSequence", default="")))
+    if total:
+        whole = int(u_start) == 1 and int(u_end) == total
+        span += f" of {total}, {'the whole sequence' if whole else 'a fragment of it'}"
+    version = str(prediction.chain_field(chain_id, "sequenceVersionDate", default=""))
+    if version:
+        span += f"; UniProt sequence version of {version[:10]}"
+    if (s_start is not None and s_end is not None
+            and (str(s_start), str(s_end)) != (str(u_start), str(u_end))):
+        span += (f". The model numbers them {s_start}-{s_end}, so residue numbers "
+                 f"here are not UniProt's")
+    return span
+
+
+def _chain_model_quality(prediction: AFDBPrediction, chain_id: str) -> str:
+    """
+    AFDB's own confidence figures for one chain: the mean pLDDT and its spread.
+
+    Kept out of `_chain_identity` deliberately. These describe the *model of* the
+    protein, not the protein, and they differ between the two chains of a
+    homodimer (the FabA fixture reports 97.24 and 97.27), so folding them into
+    the identity rows would stop identical chains collapsing into one block.
+    """
+    parts: List[str] = []
+    mean = prediction.chain_field(chain_id, "globalMetricValue", default=None)
+    if mean is not None:
+        parts.append(f"mean {float(mean):.2f}")
+    fractions = [(name, prediction.chain_field(chain_id, field, default=None))
+                 for name, field in _PLDDT_BANDS]
+    if any(value is not None for _, value in fractions):
+        # `band:pct` with no space inside it, so the report's wrapper can never
+        # separate a percentage from the band it belongs to.
+        parts.append(", ".join(f"{name}:{round(float(value or 0.0) * 100)}%"
+                               for name, value in fractions))
+    return "; ".join(parts)
 
 
 def _chain_identity(prediction: AFDBPrediction, chain_id: str) -> Tuple[Tuple[str, str], ...]:
@@ -1791,22 +1870,46 @@ def _chain_identity(prediction: AFDBPrediction, chain_id: str) -> Tuple[Tuple[st
 
     Chains whose rows are equal are the same protein, which is what lets the
     report collapse a homodimer into one block without a homo/hetero switch (D3).
+    Only facts about the *protein* belong here for that reason; anything that can
+    differ between two copies of one protein (the per-chain pLDDT figures) is
+    rendered separately by `_chain_model_quality`.
+
+    The entry name leads, because it is what AFDB surfaces and what every axis
+    label in this notebook now says, and the full protein name sits directly
+    under it. A name the endpoint truncated arrives here already marked with an
+    ellipsis by `_tidy_name`; `format_metadata_report` then says who truncated it.
     """
-    accession = prediction.chain_field(chain_id, "uniprotAccession")
-    entry_name = prediction.chain_field(chain_id, "uniprotId")
-    if accession and entry_name:
-        uniprot = f"{accession} ({entry_name})"
-    else:
-        uniprot = str(accession or entry_name or "N/A")
-    return (
+    accession = str(prediction.chain_field(chain_id, "uniprotAccession", default="") or "")
+    entry_name = str(prediction.chain_field(chain_id, "uniprotId", default="") or "")
+    # The entry name is not repeated here: it has its own row above, and it is
+    # what every axis label in the notebook says, so printing it three times in
+    # one block would be padding rather than emphasis.
+    uniprot = accession or "N/A"
+    reviewed = prediction.chain_field(chain_id, "isReviewed", default=None)
+    if reviewed is not None:
+        uniprot += (", reviewed -- Swiss-Prot" if reviewed
+                    else ", unreviewed -- TrEMBL, so the protein name and gene "
+                         "here are predicted, not curated")
+
+    organism = str(prediction.chain_field(
+        chain_id, "organismScientificName", "organism", default="N/A"))
+    tax_id = prediction.chain_field(chain_id, "taxId", default=None)
+    if tax_id is not None:
+        organism += f" (taxId {tax_id})"
+
+    rows: List[Tuple[str, str]] = [
+        ("Entry name", entry_name or "N/A"),
+        ("Protein", _tidy_name(prediction.chain_field(
+            chain_id, "proteinFullName", "uniprotDescription", default="")) or "N/A"),
         ("UniProt", uniprot),
-        ("Protein", str(prediction.chain_field(
-            chain_id, "proteinFullName", "uniprotDescription", default="N/A"))),
         ("Gene", str(prediction.chain_field(
             chain_id, "geneNames", "gene", default="N/A"))),
-        ("Organism", str(prediction.chain_field(
-            chain_id, "organismScientificName", "organism", default="N/A"))),
-    )
+        ("Organism", organism),
+    ]
+    span = _modelled_span(prediction, chain_id)
+    if span:
+        rows.append(("Modelled", span))
+    return tuple(rows)
 
 
 def format_metadata_report(
@@ -1827,6 +1930,37 @@ def format_metadata_report(
     homodimer reads as one protein in two chains while a heterodimer shows both --
     the same code path either way, with no user-facing switch (D3). Nothing is
     keyed on chain position or on the endpoint's entry order (D4).
+
+    **What is shown, and what is not.** The endpoint returns 43 fields per chain
+    and printing all of them would bury the four or five that decide how the rest
+    of the notebook should be read, so the selection is deliberate:
+
+    - *Which protein this is*: `uniprotId` (the entry name, and the label every
+      figure now carries), `uniprotDescription` (the full name, under it),
+      `uniprotAccession`, `isReviewed` (Swiss-Prot or TrEMBL, which says how much
+      the name and gene are worth), `gene`, `organismScientificName` + `taxId`.
+    - *What part of it was modelled*: `uniprotStart`/`uniprotEnd` against
+      `sequenceStart`/`sequenceEnd`, with `sequenceVersionDate`. Every score here
+      is normalised by chain length, so whether this is the whole protein or a
+      fragment changes what the numbers mean.
+    - *How good the model is, per chain*: `globalMetricValue` and the four
+      `fractionPlddt*` bands. A mean pLDDT hides its own distribution, and this
+      notebook is about confidence.
+    - *Where it came from*: `toolUsed`, `providerId`, `modelCreatedDate`,
+      `latestVersion`. Scores are not comparable across predictors.
+
+    Left out on purpose: the six document URLs (each is printed by the cell that
+    downloads it), `sequence` and `uniprotSequence` (hundreds of residues of text
+    whose only summary, the length, is already the chain length),
+    `sequenceChecksum` (answers "which sequence version" in a form only a machine
+    can compare, and nothing here compares it; `sequenceVersionDate` answers the
+    same question readably), `entityType` / `entryId` / `modelEntityId` /
+    `chainId` / `allVersions` (constant, or already on another line), the
+    reference-proteome and duplicate `isUniProt*` flags (about the accession's
+    proteome, not about this model), and `assemblyType` / `oligomericState` /
+    `complexComposition` / `isComplex`, which the Assembly, Composition and
+    "AFDB declares" rows already report *reconciled against the chains* (R023)
+    rather than merely repeated.
 
     Args:
         prediction:    The fetched metadata, or `None` in local-file mode, where
@@ -1892,13 +2026,70 @@ def format_metadata_report(
     >>> [line for line in format_metadata_report(partial, {'A': 10, 'B': 10}).splitlines()
     ...  if line.startswith(('Assembly', 'Composition'))]
     ['Assembly      : Dimer -- 2 chains (A, B)', 'Composition   : chain identities unknown']
+
+    The entry name leads each block and the full protein name sits under it. The
+    two chains of a homodimer share one identity block but keep their own pLDDT
+    figures, which is why those are not part of the grouping key:
+
+    >>> fixture = AFDBPrediction('AF-4', tuple(
+    ...     {'chainId': c, 'uniprotId': 'FABA_ECOLI', 'uniprotAccession': 'P0A6Q3',
+    ...      'uniprotDescription': '3-hydroxydecanoyl-', 'gene': 'fabA',
+    ...      'isReviewed': True, 'organismScientificName': 'Escherichia coli',
+    ...      'taxId': 83333, 'globalMetricValue': v,
+    ...      'fractionPlddtVeryHigh': 0.95, 'fractionPlddtConfident': 0.05,
+    ...      'fractionPlddtLow': 0.01, 'fractionPlddtVeryLow': 0.0}
+    ...     for c, v in (('A', 97.24), ('B', 97.27))))
+    >>> report = format_metadata_report(fixture, {'A': 172, 'B': 172})
+    >>> for line in report.splitlines():
+    ...     if line.startswith(('Chains', '  Entry', '  Protein', '  UniProt', '  pLDDT')):
+    ...         print(line)
+    Chains A, B   : 172 residues each
+      Entry name  : FABA_ECOLI
+      Protein     : 3-hydroxydecanoyl-…
+      UniProt     : P0A6Q3, reviewed -- Swiss-Prot
+      pLDDT (A)   : mean 97.24; very-high:95%, confident:5%, low:1%, very-low:0%
+      pLDDT (B)   : mean 97.27; very-high:95%, confident:5%, low:1%, very-low:0%
+
+    A name AFDB cut short is marked where it is shown *and* explained at the foot
+    of the report, with the accession whose UniProt entry carries the whole one.
+    A reader is never left to guess whether a name simply is that short:
+
+    >>> lines = report.splitlines()
+    >>> start = next(i for i, line in enumerate(lines) if line.startswith('[!]'))
+    >>> print('\\n'.join(lines[start:-1]))
+    [!] A protein name ending "…" above was cut short by AFDB itself, not here:
+        the prediction endpoint truncates a UniProt name at its first "[", which
+        is the bracket UniProt uses for an enzyme's carrier or cofactor, so a
+        name like "3-hydroxydecanoyl-[acyl-carrier-protein] dehydratase" arrives
+        as "3-hydroxydecanoyl-" and loses the word that says what the enzyme
+        does. The whole name is on the UniProt entry:
+        https://www.uniprot.org/uniprotkb/P0A6Q3
+
+    An unreviewed accession says so, because it changes what the name is worth:
+
+    >>> trembl = AFDBPrediction('AF-5', ({'chainId': 'A', 'uniprotAccession': 'A0A1W2P738',
+    ...                                   'uniprotId': 'A0A1W2P738_MOUSE',
+    ...                                   'isReviewed': False},))
+    >>> [line for line in format_metadata_report(trembl, {'A': 69}).splitlines()
+    ...  if line.startswith('  UniProt')]
+    ['  UniProt     : A0A1W2P738, unreviewed -- TrEMBL, so the protein name and']
     """
     lengths = {str(chain_id): int(n) for chain_id, n in chain_lengths.items()}
     chain_ids = list(lengths)
 
-    def row(label: str, value: str, indent: int = 0) -> str:
+    def row(label: str, value: str, indent: int = 0) -> List[str]:
+        """One `'Label : value'` row, wrapped onto hanging-indented continuations.
+
+        Returns a list because several of the rows added in this pass (the pLDDT
+        band spread, the modelled span) are longer than the rule, and a report
+        whose content runs past its own rule reads as a bug.
+        """
         pad = " " * indent
-        return f"{pad}{label:<{max(_REPORT_LABEL_WIDTH - indent, 1)}}: {value}"
+        head = f"{pad}{label:<{max(_REPORT_LABEL_WIDTH - indent, 1)}}: "
+        pieces = textwrap.wrap(value, width=max(width - len(head), 20),
+                               break_long_words=False,
+                               break_on_hyphens=False) or [""]
+        return [head + pieces[0]] + [" " * len(head) + piece for piece in pieces[1:]]
 
     # Group chains by identity. Insertion order follows `chain_lengths`, so the
     # report order is the caller's chain order and never the endpoint's.
@@ -1930,16 +2121,37 @@ def format_metadata_report(
                                               default="N/A"))
 
     lines: List[str] = ["=" * width, "COMPLEX METADATA REPORT", "=" * width]
-    lines.append(row("Accession", str(
-        accession or (prediction.accession if prediction is not None else "N/A"))))
+    lines += row("Accession", str(
+        accession or (prediction.accession if prediction is not None else "N/A")))
     lines.extend(assembly.describe().splitlines())
-    lines.append(row("Model version", version))
-    lines.append(row("Total length", f"{sum(lengths.values())} residues ("
-                     + ", ".join(f"{c}: {lengths[c]}" for c in chain_ids) + ")"))
+    lines += row("Model version", version)
+
+    # Provenance, read through `_declared_field` rather than `shared_field`: a
+    # disagreement between the per-chain entries about which tool made the model
+    # is a fact worth reporting, not a reason to refuse to print the report.
+    if prediction is not None:
+        tool, tool_note = _declared_field(prediction, "toolUsed")
+        provider, _ = _declared_field(prediction, "providerId")
+        if tool:
+            lines += row("Predicted by", str(tool) + (f", run by {provider}"
+                                                      if provider else ""))
+        if tool_note:
+            lines += row("Predicted by", tool_note)
+        created, _ = _declared_field(prediction, "modelCreatedDate")
+        if created:
+            lines += row("Model created", str(created)[:10])
+
+    lines += row("Total length", f"{sum(lengths.values())} residues ("
+                 + ", ".join(f"{c}: {lengths[c]}" for c in chain_ids) + ")")
     lines.append("-" * width)
 
+    # Any protein name `_tidy_name` marked as cut short, with the accession whose
+    # UniProt entry carries the whole one. Collected while the blocks are built
+    # so the footnote can name them instead of gesturing at "some names".
+    truncated: List[str] = []
+
     if prediction is None:
-        lines.append(row("Chains", ", ".join(chain_ids) or "(none)"))
+        lines += row("Chains", ", ".join(chain_ids) or "(none)")
         lines.append("  no AFDB metadata was fetched, so the protein identity of "
                      "each chain")
         lines.append("  is unknown here rather than defaulted")
@@ -1954,17 +2166,43 @@ def format_metadata_report(
                 size = f"{sizes.pop()} residues each"
             else:
                 size = ", ".join(f"{c}: {lengths[c]}" for c in members) + " residues"
-            lines.append(row(head, size))
+            lines += row(head, size)
             for label, value in identity:
-                lines.append(row(label, value, indent=2))
+                lines += row(label, value, indent=2)
+                if label == "Protein" and value.endswith("…"):
+                    truncated.append(str(prediction.chain_field(
+                        members[0], "uniprotAccession", default="")) or members[0])
+            # Per chain, never collapsed: two copies of one protein are still two
+            # models of it, and AFDB scores each separately (the FabA homodimer's
+            # chains differ, 97.24 against 97.27).
+            for chain_id in members:
+                quality = _chain_model_quality(prediction, chain_id)
+                if quality:
+                    lines += row("pLDDT" if len(members) == 1
+                                 else f"pLDDT ({chain_id})", quality, indent=2)
         for chain_id in undescribed:
-            lines.append(row(f"Chain {chain_id}", f"{lengths[chain_id]} residues"))
+            lines += row(f"Chain {chain_id}", f"{lengths[chain_id]} residues")
             lines.append("  no AFDB metadata entry for this chain (endpoint "
                          f"described: {', '.join(prediction.chain_ids) or '(none)'})")
         extra = [c for c in prediction.chain_ids if c not in lengths]
         if extra:
-            lines.append(row("Note", "AFDB metadata also describes chains absent "
-                                     f"from the structure: {', '.join(extra)}"))
+            lines += row("Note", "AFDB metadata also describes chains absent "
+                                 f"from the structure: {', '.join(extra)}")
+
+    if truncated:
+        lines.append("-" * width)
+        lines += textwrap.wrap(
+            'A protein name ending "…" above was cut short by AFDB itself, '
+            'not here: the prediction endpoint truncates a UniProt name at its '
+            'first "[", which is the bracket UniProt uses for an enzyme\'s '
+            'carrier or cofactor, so a name like '
+            '"3-hydroxydecanoyl-[acyl-carrier-protein] dehydratase" arrives as '
+            '"3-hydroxydecanoyl-" and loses the word that says what the enzyme '
+            'does. The whole name is on the UniProt entry: '
+            + ", ".join(f"https://www.uniprot.org/uniprotkb/{a}"
+                        for a in dict.fromkeys(truncated)),
+            width=width, initial_indent="[!] ", subsequent_indent="    ",
+            break_long_words=False, break_on_hyphens=False)
 
     lines.append("=" * width)
     return "\n".join(lines)
@@ -2818,10 +3056,43 @@ def verify_document_agreement(pae: PAEMatrix, plddt: PLDDTScores) -> Dict[str, i
 _TRUNCATION_MARKERS: Tuple[str, ...] = ("-", ",", "(", "/", "+")
 """Trailing characters that mean the service cut a protein name short.
 
-The homodimer fixture's `name` arrives as `'3-hydroxydecanoyl-'`, a prefix of
+The homodimer fixture's name arrives as `'3-hydroxydecanoyl-'`, a prefix of
 "3-hydroxydecanoyl-[acyl-carrier-protein] dehydratase". The name is still worth
 showing -- it is the only human-readable identity in local-file mode -- so it is
-marked with an ellipsis rather than discarded."""
+marked with an ellipsis rather than discarded.
+
+**Where the truncation comes from, measured.** It is AFDB's, not this notebook's,
+and it is specific to the *complex* records. The same accession queried as a
+monomer answers with the whole name:
+
+    /api/prediction/P0A6Q3            -> '3-hydroxydecanoyl-[acyl-carrier-protein] dehydratase'
+    /api/prediction/AF-0000000065889468 -> '3-hydroxydecanoyl-'
+
+Sampling complex records against the monomer record of each chain's accession
+(2026-09-09, 36 chain rows, 22 distinct names) put the rule beyond doubt: **the
+complex endpoint cuts `uniprotDescription` at the first `'['`.** All four names
+that contained a `'['` were cut there and only there --
+
+    '3-hydroxydecanoyl-[acyl-carrier-protein] dehydratase' -> '3-hydroxydecanoyl-'
+    '3-hydroxyacyl-[acyl-carrier-protein] dehydratase FabZ' -> '3-hydroxyacyl-'
+    'Beta-ketoacyl-[acyl-carrier-protein] synthase III'     -> 'Beta-ketoacyl-'
+    'Beta-ketoacyl-[acyl-carrier-protein] synthase III B, chloroplastic'
+                                                            -> 'Beta-ketoacyl-'
+
+-- and all eighteen names without one arrived intact, including names carrying
+commas, parentheses, `+`, `:` and a double hyphen ('Fe(3+) ions import
+ATP-binding protein FbpC', 'Fructose-1,6-bisphosphatase class 1',
+'Ferredoxin--NADP reductase'). UniProt uses square brackets for the carrier or
+cofactor in an enzyme name, so the affected set is enzymes named after what they
+act on: the acyl-carrier-protein enzymes above, the `[NADH]` and `[NADPH]`
+reductases, and their relatives. Every one of them loses its head noun, which is
+why a truncated name must never be shown unmarked: `'3-hydroxydecanoyl-'` reads
+as a chemical group, not as a dehydratase.
+
+Nothing is repaired here. Rebuilding the name would mean a second request per
+chain to an endpoint the notebook does not otherwise use, and a silently
+repaired name would hide a service bug worth reporting. The name is marked, the
+report says who truncated it, and the reader is pointed at the UniProt entry."""
 
 
 def _tidy_name(name: Optional[str]) -> str:
@@ -2866,19 +3137,20 @@ class ChainLabel:
 
     Attributes:
         chain_id:     `label_asym_id`, e.g. `'A'`. The only required field.
+        entry_name:   UniProt entry name (`uniprotId`), e.g. `'ISG20_HUMAN'`.
+                      The preferred short identifier -- see `token`.
         protein_name: Full protein name, e.g. the PAE document's `name`.
         gene:         Gene name, e.g. `'ISG20'`.
         uniprot:      UniProt accession, e.g. `'Q96AZ6'`.
-        entry_name:   UniProt entry name, e.g. `'ISG20_HUMAN'`.
 
     Example
     -------
     >>> isg20 = ChainLabel('A', 'Interferon-stimulated gene 20 kDa protein',
     ...                    gene='ISG20', uniprot='Q96AZ6', entry_name='ISG20_HUMAN')
     >>> isg20.token
-    'ISG20'
+    'ISG20_HUMAN'
     >>> isg20.short
-    'ISG20 (A)'
+    'ISG20_HUMAN (A)'
     >>> isg20.full
     'Chain A: Interferon-stimulated gene 20 kDa protein (Q96AZ6)'
 
@@ -2888,6 +3160,12 @@ class ChainLabel:
     ('', 'Chain B', 'Chain B')
 
     A homodimer's two chains stay distinguishable even though the protein is one:
+
+    >>> [ChainLabel(c, entry_name='FABA_ECOLI').short for c in 'AB']
+    ['FABA_ECOLI (A)', 'FABA_ECOLI (B)']
+
+    Without the entry name the gene symbol takes over, and the chain id survives
+    every rung of the ladder:
 
     >>> [ChainLabel(c, gene='fabA').short for c in 'AB']
     ['fabA (A)', 'fabA (B)']
@@ -2902,14 +3180,37 @@ class ChainLabel:
     @property
     def token(self) -> str:
         """
-        The shortest identifier for the *protein*, with no chain id: `'ISG20'`.
+        The shortest identifier for the *protein*, with no chain id: `'ISG20_HUMAN'`.
 
-        Gene first, then accession, then entry name -- a gene symbol is the form
-        a biologist reads fastest, and it is what fits a tick label. `''` when
-        none is known; the protein name is deliberately not used here, because a
-        41-character name is not a token.
+        **UniProt entry name first**, then the gene symbol, then the accession.
+        The entry name is what AlphaFold DB itself puts on an entry page -- the
+        gene is catalogued but not displayed -- it is always short by
+        construction, and it names the organism as well as the protein, which a
+        gene symbol does not. On a cross-species dimer that difference is the
+        whole point: `ISG20` / `Sumo1` hides that one chain is human and the
+        other mouse, while `ISG20_HUMAN` / `SUMO1_MOUSE` says so on the axis
+        without a caption.
+
+        Below it the ladder trades readability for coverage one rung at a time:
+        the gene symbol is still short and still meaningful; the accession is
+        always present on an AFDB record and always unique, but reads as a
+        barcode; and with none of the three, `short` falls through to `'Chain
+        A'`. The protein name is deliberately not a rung, because a 41-character
+        name is not a token.
+
+        `''` when none is known.
+
+        >>> ChainLabel('A', 'x', gene='fabA', uniprot='P0A6Q3',
+        ...            entry_name='FABA_ECOLI').token
+        'FABA_ECOLI'
+        >>> ChainLabel('A', 'x', gene='fabA', uniprot='P0A6Q3').token
+        'fabA'
+        >>> ChainLabel('A', 'x', uniprot='P0A6Q3').token
+        'P0A6Q3'
+        >>> ChainLabel('A', 'x').token, ChainLabel('A', 'x').short
+        ('', 'Chain A')
         """
-        return str(self.gene or self.uniprot or self.entry_name or "")
+        return str(self.entry_name or self.gene or self.uniprot or "")
 
     @property
     def short(self) -> str:
@@ -4972,6 +5273,15 @@ def format_directional_report(
     tolerance = rows[0].tolerance if rows else DIRECTIONAL_DELTA_TOLERANCE
     out.append("")
     out.append("  ◄  the direction the reported value came from")
+    out.append("  The Combined column is the maximum (or mean) over the two "
+               "DIRECTIONS.")
+    out.append("  For ipTM and the three ipSAE variants, each directional value "
+               "in the two")
+    out.append("  columns left of it is itself already a maximum over RESIDUES. "
+               "Two different")
+    out.append("  maxima: the per-residue profile figure below stars the "
+               "first, this table")
+    out.append("  resolves the second.")
     if resolved is not None:
         out.append("  »  the direction selected for inspection (DIRECTION)")
     out.append(f"  [!] the two directions differ by more than {tolerance:.4f}")
@@ -6822,6 +7132,49 @@ def _haloed(foreground: str = "white", linewidth: float = 2.4) -> List[Any]:
     return [mpatheffects.withStroke(linewidth=linewidth, foreground=foreground)]
 
 
+_CHARS_PER_INCH_AT_1PT: float = 135.0
+"""Rendered width of DejaVu Sans, as characters per inch per point of font size.
+
+Measured, not guessed: at `fontsize=10` a 9-character label renders 0.66 in wide
+(13.6 char/in), at `fontsize=8` 0.53 in (17.0), at `fontsize=12` 0.79 in (11.4).
+`135 / fontsize` reproduces all three to within 1%. It lets a figure ask "how
+many characters fit across this many inches" before anything is drawn, which is
+the only moment at which an axis label can still be wrapped."""
+
+
+def _fit_label(text: str, inches: float, fontsize: float = 10.0,
+               floor: int = 8) -> str:
+    """
+    Wrap an axis label onto as many lines as it takes to fit `inches` of width.
+
+    Chain labels grew when the notebook switched from the gene symbol to the
+    UniProt entry name: `fabA (A)` is 8 characters, `A0A1W2P738_MOUSE (B)` is 20,
+    and several axis labels are a chain label plus two or three words. Wrapping
+    is the right fix rather than shrinking the label or growing the figure. The
+    figure sizes are what M5 tuned against the block shapes, and the labels are
+    read once each, so a second line costs nothing that matters.
+
+    Args:
+        text:     The label.
+        inches:   Room available along the label's own direction -- the panel
+                  width for an x label, its height for a rotated y label.
+        fontsize: Points, as passed to `set_xlabel`.
+        floor:    Never wrap narrower than this many characters, so a sliver of a
+                  panel produces a stack of words rather than a stack of letters.
+
+    Example
+    -------
+    >>> print(_fit_label('A0A1W2P738_MOUSE (B) residue index', 2.05, 10))
+    A0A1W2P738_MOUSE (B)
+    residue index
+    >>> _fit_label('fabA (A) residue index', 2.05, 10)
+    'fabA (A) residue index'
+    """
+    chars = max(floor, int(inches * _CHARS_PER_INCH_AT_1PT / max(fontsize, 1.0)))
+    return textwrap.fill(text, width=chars, break_long_words=False,
+                         break_on_hyphens=False)
+
+
 def apply_plot_style(overrides: Optional[Mapping[str, Any]] = None) -> None:
     """
     Apply the notebook's seaborn style and `rcParams` to the global pyplot state.
@@ -7102,8 +7455,16 @@ def plot_interface_contact_map(
     fig.colorbar(im, ax=ax, label='CB-CB distance (Å)', fraction=0.05, pad=0.03,
                  shrink=min(1.0, max(0.3, true_h / max(panel_h, 2.6))),
                  anchor=(0.0, 1.0), panchor=False)
-    ax.set_xlabel(f'{name_y} residue index', fontsize=10)
-    ax.set_ylabel(f'{name_x} residue index', fontsize=10)
+    # Wrapped to the room each label actually has. A 20-character chain label
+    # plus 'residue index' is wider than a narrow block's panel, and the rotated
+    # y label is taller than a wide-short block's. The budgets are the panel's
+    # own dimensions, not the figure's: constrained layout gives the title and
+    # the x label their space out of the same box, so a label sized to the whole
+    # figure still runs off it.
+    ax.set_xlabel(_fit_label(f'{name_y} residue index', panel_w + 0.95, 10),
+                  fontsize=10)
+    ax.set_ylabel(_fit_label(f'{name_x} residue index', max(panel_h, 1.6), 10),
+                  fontsize=10)
     # The panel is as narrow as the block is, so the title is wrapped to the
     # width it actually has rather than being allowed to run off the figure.
     ax.set_title(
@@ -7139,7 +7500,10 @@ def plot_interface_contact_map(
         # ends close to the right edge does not write over the legend.
         near_right = end > 0.75 * n_longest
         ax2.annotate(
-            f'{name} ends at residue {end}',
+            # Two lines, so the widest is the chain label itself rather than
+            # the label plus four words: the anchor is a data position part-way
+            # along the bar and there may be very little room beside it.
+            f'{name}\nends at residue {end}',
             xy=(end - 0.5, middle),
             xytext=(-6 if near_right else 6, 0), textcoords='offset points',
             ha='right' if near_right else 'left', va='center',
@@ -7248,27 +7612,61 @@ def plot_pae_matrix(
 
     cx, cy = _centre(chain_x), _centre(chain_y)
     name_x, name_y = name[chain_x], name[chain_y]
-    for col, row, text in ((cx, cx, f'Intra\n{name_x}'),
-                           (cy, cx, f'Inter\n{name_x}→{name_y}'),
-                           (cx, cy, f'Inter\n{name_y}→{name_x}'),
-                           (cy, cy, f'Intra\n{name_y}')):
+
+    # Each annotation is centred inside its own quadrant, and a quadrant is only
+    # as wide as its chain is long: chain B of AF-0000000204661110 is 69 residues
+    # of 632, roughly half an inch of a 4.3 in axes, which no protein label fits
+    # inside. Text that does not fit does not shrink, it runs across the dashed
+    # boundary and over its neighbour, so each annotation is given the longest
+    # form that fits -- names side by side, names stacked, bare chain ids, or the
+    # block word alone. Nothing is lost by falling back: the x axis label under
+    # the figure names every chain in full. This overflowed before the labels
+    # lengthened, at `Sptlc3 (A)`; it is fixed rather than merely not worsened.
+    axes_in = max(1.0, min(figsize) - 1.1)   # the image is square, so height binds
+    total = float(sum(span.length for span in pae.spans)) or 1.0
+    bold_chars_per_inch = 130.0 / 9.0        # `_CHARS_PER_INCH_AT_1PT`, bold at 9 pt
+
+    def _annotation(head: str, chain_ids: Tuple[str, ...]) -> str:
+        room = axes_in * min(pae.chain_length(c) for c in chain_ids) / total
+        names = [name[c] for c in chain_ids]
+        for candidate in (head + '\n' + '→'.join(names),
+                          head + '\n' + '\n→'.join(names),
+                          head + '\n' + '→'.join(chain_ids),
+                          head):
+            widest = max(len(line) for line in candidate.splitlines())
+            if widest / bold_chars_per_inch <= room:
+                return candidate
+        return head
+
+    for col, row, text in (
+            (cx, cx, _annotation('Intra', (chain_x,))),
+            (cy, cx, _annotation('Inter', (chain_x, chain_y))),
+            (cx, cy, _annotation('Inter', (chain_y, chain_x))),
+            (cy, cy, _annotation('Intra', (chain_y,)))):
         ax.text(col, row, text, ha='center', va='center',
                 color='#212121', fontsize=9, fontweight='bold',
                 path_effects=_haloed('white', 2.8))
 
+    # Both of these name every chain, so both grew with the labels. They are
+    # wrapped to the figure rather than allowed to run off its edges; the width
+    # left for text is the figure less the colour bar and the y label.
+    text_in = max(2.0, figsize[0] - 1.0)
     if len(ids) == 2:
         first, second = ids
         n_first = pae.chain_length(first)
-        ax.set_xlabel(f'Residue index ({name[first]}: 0 to {n_first - 1}, '
-                      f'{name[second]}: {n_first} to end)', fontsize=10)
+        ax.set_xlabel(_fit_label(f'Residue index ({name[first]}: 0 to {n_first - 1}, '
+                                 f'{name[second]}: {n_first} to end)', text_in, 10),
+                      fontsize=10)
     else:
-        ax.set_xlabel('Residue index (' + ', then '.join(name[c] for c in ids) + ')',
+        ax.set_xlabel(_fit_label('Residue index ('
+                                 + ', then '.join(name[c] for c in ids) + ')',
+                                 text_in, 10),
                       fontsize=10)
     ax.set_ylabel('Residue index', fontsize=10)
     head = f'Full PAE Matrix: {accession}' if accession else 'Full PAE Matrix'
-    ax.set_title(f'{head}\n'
-                 f'(dashed line = chain boundary between {name_x} and {name_y})',
-                 fontsize=11)
+    ax.set_title(head + '\n' + _fit_label(
+        f'(dashed line = chain boundary between {name_x} and {name_y})',
+        text_in + 0.5, 11), fontsize=11)
 
     return fig
 
@@ -7476,9 +7874,9 @@ def plot_pae_score_masks(
         # so repeating both names four times spends width that a tall-sliver
         # block does not have. Tick labels stay on every panel.
         if row == nrows - 1:
-            ax.set_xlabel(f'{name_y} residue', fontsize=8)
+            ax.set_xlabel(_fit_label(f'{name_y} residue', panel_w, 8), fontsize=8)
         if col == 0:
-            ax.set_ylabel(f'{name_x} residue', fontsize=8)
+            ax.set_ylabel(_fit_label(f'{name_x} residue', panel_h, 8), fontsize=8)
         # A panel can be under an inch wide when the block is a tall sliver, so
         # the tick count is derived from the panel size rather than left to the
         # default, which would overlap its own labels.
@@ -7563,11 +7961,17 @@ def _annotate_peaks(
     """
     Mark each series' argmax residue and label it with residue number and value.
 
-    The reported score of a direction *is* the argmax residue's value, so this is
-    the single most consequential point on the panel and it was previously
-    invisible (R062). Series peaking on the same residue -- the usual case, since
-    the three ipSAE variants differ only in `d0` -- share one label box rather
-    than stacking four overlapping annotations.
+    This is the **residue maximum**: the largest value in one direction's own
+    profile, which is that direction's score. It is not the **directional
+    maximum**, the larger of the two directions, which is what Section 7 reports.
+    The box says "residue max" rather than "peak" for exactly that reason -- a
+    bare "peak" reads as "the score", and on a two-panel figure it is only half
+    of it.
+
+    The residue maximum is the single most consequential point on the panel and
+    it was previously invisible (R062). Series peaking on the same residue -- the
+    usual case, since the three ipSAE variants differ only in `d0` -- share one
+    label box rather than stacking four overlapping annotations.
     """
     groups: Dict[int, List[Tuple[str, float]]] = {}
     for key in PROFILE_SERIES:
@@ -7587,7 +7991,7 @@ def _annotate_peaks(
     for index, entries in sorted(groups.items(),
                                  key=lambda kv: -max(v for _, v in kv[1])):
         top = max(value for _, value in entries)
-        lines = [f"peak · {_residue_name(index, res_ids)}"]
+        lines = [f"residue max · {_residue_name(index, res_ids)}"]
         lines += [f"{SCORE_DISPLAY_NAMES[key]}  {value:.4f}"
                   for key, value in entries]
         # Keep the box inside the axes: left of the star on the right-hand half
@@ -7636,13 +8040,18 @@ def plot_residue_score_profiles(
     """
     Per-residue score profiles, one panel per direction of the chain pair.
 
-    Every score reported for a complex is one residue's number -- the maximum
-    over the profile -- so this figure is where a headline value stops being a
-    verdict and becomes a location: which residues carry the interface, whether
-    the three ipSAE variants rank the same residue highest, and whether the peak
-    sits on well-predicted backbone or on a low-pLDDT loop. The peak of each
-    series is marked with a star and labelled with its residue number and value,
-    because that number is the score (R062).
+    **Two maxima, kept apart.** Each of the four scores drawn here is combined
+    twice over. First the *residue maximum*: within one direction, the largest
+    value in the profile below, which is that direction's score. Then the
+    *directional maximum*: the larger of the two directions, which is the number
+    Section 7 reports. A star marks the residue maximum, one per series per panel
+    (R062); the directional maximum is the comparison *between* the two panels,
+    and Section 4.6 tabulates it.
+
+    So this figure is where a headline value stops being a verdict and becomes a
+    location: which residues carry the interface, whether the three ipSAE
+    variants rank the same residue highest, and whether the residue maximum sits
+    on well-predicted backbone or on a low-pLDDT loop.
 
     The top panel is the `x -> y` direction (rows of `block_xy`, so residues of
     `chain_x`); the bottom is `y -> x`. They are genuinely two measurements, not
@@ -7746,13 +8155,25 @@ def plot_residue_score_profiles(
         ax.plot([], [], linestyle='none', marker='*', markersize=11,
                 color=PEAK_MARKER_COLOUR, markeredgecolor='white',
                 markeredgewidth=0.8,
-                label='peak residue = this direction’s reported score')
+                label='residue maximum = this direction’s score')
 
         ax.set_ylim(0, 1)
         ax.set_xlim(-0.5, n_res - 0.5)
         ax.set_xlabel(f'Residue index along {row_label}')
         ax.set_ylabel('Per-residue score (0–1)')
-        ax.set_title(f'Per-Residue Score Profiles: {row_label} → {col_label}')
+        # Two different maxima meet on this figure and they are easy to
+        # conflate, so the title separates them: the star is the maximum over
+        # RESIDUES within this one direction, and the score Section 7 reports is
+        # the maximum over the two DIRECTIONS, one of which this panel is.
+        ax.set_title(
+            f'Per-Residue Score Profiles: {row_label} → {col_label}\n'
+            # The word, not the glyph: DejaVu Sans has no U+2605 and renders it
+            # as a tofu box, while the marker itself is drawn by matplotlib.
+            + _fit_label('Each star is the residue maximum, this direction’s '
+                         'score. The reported score is the directional maximum, '
+                         'over this panel and the other one.',
+                         figsize[0] - 1.0, 9),
+            fontsize=11)
         ax.legend(loc='upper left', fontsize=9, ncol=2)
 
     fig.tight_layout()
@@ -10440,12 +10861,22 @@ def format_iptm_report(
     lines += [f'ipTM_d0chn : {result.score:.4f}   [{band}]',
               f'  d0chn                 : {result.d0:.4f} '
               f'(from n0chn = {result.n0} = {nx} + {ny} residues)']
-    # The reported value is one residue's number, so name that residue.
+    # Each direction's score is the largest value in its own per-residue
+    # profile, so name that residue. Two different maxima are in play and the
+    # report says which is which: this one is over residues, the reported score
+    # is over directions.
     for row, col, profile, res_ids in ((name_x, name_y, result.forward, res_ids_x),
                                        (name_y, name_x, result.reverse, res_ids_y)):
         index = profile.argmax_index
         number = index if res_ids is None else np.asarray(res_ids)[index]
-        lines.append(f'  peak residue, {row} → {col}: {number} (index {index})')
+        lines.append(f'  residue max, {row} → {col}: residue {number} '
+                     f'(index {index})')
+    lines += ['  the two maxima        : the lines above are maxima over '
+              'RESIDUES, one per',
+              '                          direction. The reported score is the '
+              'maximum over the',
+              '                          two DIRECTIONS; Section 4.6 breaks that '
+              'one out.']
     lines.append(_threshold_line('threshold             ', 'iptm_d0chn'))
     return '\n'.join(lines)
 
@@ -10465,7 +10896,10 @@ def format_ipsae_report(result: IPSAEResult) -> str:
     Returns:
         The multi-line report.
     """
-    lines = [f'PAE cutoff: {result.pae_cutoff:.0f} Å (strict <)', '']
+    lines = [f'PAE cutoff: {result.pae_cutoff:.0f} Å (strict <)',
+             'Each score below is two maxima deep: a maximum over RESIDUES within',
+             'one direction, then a maximum over the two DIRECTIONS. Section 4.6',
+             'separates them.', '']
     for key, variant in result.variants.items():
         _, band = traffic_light(variant.score, key)
         lines.append(f'  {SCORE_DISPLAY_NAMES[key]:12s}: {variant.score:.4f}   [{band}]')
@@ -10476,7 +10910,7 @@ def format_ipsae_report(result: IPSAEResult) -> str:
               f'  d0dom : {result.d0dom.d0:.4f}  (n0dom = {result.d0dom.n0}, '
               'of the direction that supplied the reported value)',
               f'  d0res : {result.d0res.d0:.4f}  (n0res = {result.d0res.n0}, '
-              'of the peak residue alone)']
+              'of the residue maximum alone)']
 
     ordered = (result.d0chn.score >= result.d0dom.score - 1e-6
                and result.d0dom.score >= result.d0res.score - 1e-6)

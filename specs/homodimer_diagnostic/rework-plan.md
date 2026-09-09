@@ -1906,6 +1906,56 @@ numerical identity against the validation report, doctests, and the geometry of 
 changes. A stalled agent is not the same as failed work, but it does mean nothing can be taken
 on trust.
 
+
+### Second review pass, 2026-09-09
+
+**Labels now use the UniProt entry name** (`uniprotId`), not the gene, on the user's authority
+as an AFDB author: AFDB does not surface the gene on its entry pages. Ladder is
+`entry_name -> gene -> uniprot -> bare chain id`. It also names the organism, which is not
+cosmetic on the cross-species fixtures: `ISG20 (A)` / `Sumo1 (B)` hides that one chain is human
+and the other mouse; `ISG20_HUMAN` / `SUMO1_MOUSE` says so on the axis.
+
+The longer labels caused six real axis-label overflows, fixed **in the figures, not by
+shortening the labels**, with a `_fit_label` helper whose characters-per-inch constant was
+measured against DejaVu Sans at three sizes. The control run also revealed two overflows that
+**pre-dated** this change and were never noticed.
+
+**Metadata report expanded from 5 fields to 25 of the 43 available**, with the 18 exclusions
+justified individually. Notable additions: `isReviewed` (Swiss-Prot vs TrEMBL changes how much
+a protein name is worth, and it discriminates on the fixtures), `taxId`, the modelled-range
+versus UniProt-range comparison (every score here is length-normalised, so a fragment and a
+whole protein are not comparable), the per-chain pLDDT distribution rather than just the mean,
+and `toolUsed` (two different predictors appear across the fixtures, and scores are not
+comparable across predictors). The agent declined `sequenceChecksum` and said why.
+
+**A live AFDB bug found and independently confirmed.** `uniprotDescription` is truncated at the
+first `[` in the **complex** records but not in the monomer records:
+
+```
+/api/prediction/P0A6Q3              -> '3-hydroxydecanoyl-[acyl-carrier-protein] dehydratase'
+/api/prediction/AF-0000000065889468 -> '3-hydroxydecanoyl-'
+```
+
+Sampled across 36 chain rows / 22 distinct names: **all four names containing `[` were cut at
+it, all eighteen without one arrived intact**, including names with commas, parentheses, `+`,
+`:` and a double hyphen. So it is not a length limit. UniProt uses square brackets for an
+enzyme's carrier or cofactor, so the affected set is enzymes named after what they act on, and
+**every one loses its head noun**: `'3-hydroxydecanoyl-'` reads as a chemical group rather than
+a dehydratase. The notebook marks it with an ellipsis plus a footnote naming the mechanism, and
+does not repair it, because a silently repaired name would hide the bug. **Worth reporting to
+the AFDB team.**
+
+**The two maxima are now named apart.** The user, who commissioned this work, read the residue
+maximum as the directional one, because cell 22 printed both on a single line. There are two
+distinct operations: the **residue maximum** over residues within one direction (why the score
+is one residue's value, and what the profile plot stars), and the **directional maximum** over
+the two directions (what the 4.6 breakdown resolves). Every score in 4.1 and 4.2 is two maxima
+deep and only the second concerns asymmetry. Threaded consistently through cells 20, 22, 32,
+34 and four module report formatters.
+
+339 doctests (was 324). All seven scores bit-identical on all four fixtures, compared by float
+`repr` rather than tolerance.
+
 ## Milestones and execution order
 
 46 tasks in 8 milestones. Execution model, agreed with the user 2026-09-07: each task goes to
