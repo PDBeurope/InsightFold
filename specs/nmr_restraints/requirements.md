@@ -78,6 +78,8 @@ The notebook must remain an exploratory research-use evidence viewer. It must no
 - Weighted ambiguity semantics, pseudoatom expansion, dynamic averaging, or full assignment-resolution semantics in v1.
 - Machine-learning interpretation.
 - Cross-structure comparison, batch workflows, or production platform features.
+- Mutation-centric workflows or sequence-variant interpretation.
+- AlphaFold or AFDB example flows.
 - Clinical, diagnostic, regulated, or patient-specific interpretation.
 
 ## Edge Cases And Failure Behavior
@@ -102,7 +104,7 @@ The notebook must remain an exploratory research-use evidence viewer. It must no
 
 | ID | Question | Type | Owner | Resolution |
 |---|---|---|---|---|
-| Q-001 | Which exact fixture entries should cover happy path, partial mapping, ambiguous restraints, dihedral restraints, no violations, and missing/unsupported restraints? | blocking | Fixture selection / domain reviewer | Provisional happy path is `9L1V`; fixture-selection must record expected counts before implementation validation. |
+| Q-001 | Which implementation-derived expected snapshots should be frozen for the preserved fixture set before notebook execution validation? | blocking | Fixture selection / domain reviewer | Preserve `happy-path-9l1v`, `local-copy-9l1v`, `edge-or-9l1v`, `edge-dihedral-9l1v`, `negative-missing-restraints-1crn`, `edge-wrapped-dihedral-synthetic`, and `edge-low-mapping-synthetic`; implementation may scaffold against them, but validation stays blocked until expected snapshot values are recorded. |
 | Q-002 | Should PDBe entry-file endpoints be canonical over RCSB endpoints for all remote retrieval? | assumption | Implementation lead | Proceed with PDBe canonical for v1 model/restraint retrieval and retain RCSB model endpoint as documented fallback. |
 | Q-003 | Which NMR-STAR parser is canonical if `pynmrstar` fails on selected fixtures? | assumption | Implementation lead / domain reviewer | Start with `pynmrstar`; switch or wrap only if fixture parsing fails. |
 | Q-004 | Should v1 analyze only one selected NMR model, or expose multi-model controls while avoiding ensemble analysis? | assumption | Product owner / domain reviewer | Use `model_index = 0` default with a visible selector; no ensemble-wide summaries in v1. |

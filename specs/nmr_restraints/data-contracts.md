@@ -25,6 +25,7 @@ Source PRD: `specs/nmr_restraints/nmr_restraints_prd.md`
 | `local_context_radius` | float | yes | `> 0` | Default `6.0` Angstrom. |
 | `max_visible_restraints` | integer | yes | `>= 0` | Default `250`; `0` means hide restraint overlays. |
 | `cache_enabled` | boolean | yes | boolean | Default `true`. |
+| `cache_root` | path string | no | repo-local writable path when overridden | Defaults to `specs/nmr_restraints/fixtures/cache/` for raw downloaded fixture files; cache directory is intentionally gitignored. |
 
 ### Local Input
 
@@ -33,6 +34,7 @@ Source PRD: `specs/nmr_restraints/nmr_restraints_prd.md`
 | `model_path` | path string | yes in local mode | existing `.cif` or `.mmcif` file | Contents parsed as data only. |
 | `restraint_path` | path string | yes in local mode | existing `.str` file | Contents parsed as data only. |
 | `pdb_id_label` | string | no | optional four-character ID or free text label | Used for provenance and cache key only. |
+| `cache_root` | path string | no | repo-local writable path when overridden | Local fixture cache must stay under the repo; do not rely on arbitrary browser-readable filesystem paths for Mol* rendering. |
 
 ## Structure Parsing Contract
 
@@ -74,6 +76,14 @@ One row per residue/component present in the selected model after atom filtering
 | `centroid_x`, `centroid_y`, `centroid_z` | float | yes | Residue/component centroid for fallback spatial queries. |
 | `atom_count` | int | yes | Included atom count. |
 | `residue_type` | string | optional | protein, nucleic_acid, ligand, water, unknown if classified. |
+
+Canonical `residue_key` format for v1:
+
+```text
+{auth_asym_id}:{auth_seq_id}:{auth_comp_id}:{model_index}
+```
+
+If insertion-code semantics need explicit preservation for a parsed entry, include the deposited insertion code inside the `auth_seq_id` component rather than adding a second key format.
 
 ## Restraint Parsing Contract
 
@@ -211,8 +221,14 @@ Additional required columns:
 
 | State | Required Inputs | Required Behavior | Failure Behavior |
 |---|---|---|---|
-| `global_mvs_state` | model URL or notebook-embedded/served model content, residue density table, thresholded violation table | Shows whole structure as cartoon colored by density; violated restraints only; cap by `max_visible_restraints`; renders inline in the notebook cell using `state.molstar_html()` encoded into a data-URI `IFrame` | Show density table and warning if state build/render fails |
-| `local_mvs_state` | selected residue, local context table, evaluated restraints, model URL or notebook-embedded/served model content | Shows selected residue, neighbors, local restraints, local violations, reduced-opacity context; renders inline in the notebook cell using the same embedded `IFrame` helper | Show local tables and warning if render fails |
+| `global_mvs_state` | browser-fetchable model URL for remote/cache mode, or notebook-embedded/served model content for local-file mode; residue density table; thresholded violation table | Shows whole structure as cartoon colored by density; violated restraints only; cap by `max_visible_restraints`; renders inline in the notebook cell using `state.molstar_html()` encoded into a data-URI `IFrame`. Remote/cache mode must not embed the full cached mmCIF as a nested `data:` URI inside the MVS state. | Show density table and warning if state build/render fails |
+| `local_mvs_state` | selected residue, local context table, evaluated restraints, browser-fetchable model URL for remote/cache mode or notebook-embedded/served model content for local-file mode | Shows selected residue, neighbors, local restraints, local violations, reduced-opacity context; renders inline in the notebook cell using the same embedded `IFrame` helper | Show local tables and warning if render fails |
+
+Visualization source policy:
+
+- Python parsing and validation may use repo-local cached mmCIF files.
+- MolViewSpec/Mol* remote and cache modes should use the public PDBe model URL so the browser loads structure data the same way as `notebooks/homodimer_diagnostic.ipynb`.
+- Local-file mode cannot hand an arbitrary filesystem path to browser-side Mol*. It must use a documented embedded or served fallback and emit a visible warning if that fallback is unavailable.
 
 ## Provenance And Cache Contract
 
@@ -233,7 +249,12 @@ Cached artifacts may include:
 Each cached artifact must record:
 
 - source URL or local path
+- browser visualization URL when different from the parsed local path
 - retrieval/load timestamp
 - cache creation timestamp
 - config hash
 - parser package names and versions where available
+
+Raw downloaded fixture files must remain under `specs/nmr_restraints/fixtures/cache/` or another repo-local cache path explicitly documented in provenance. The cache directory must stay gitignored.
+
+Repo-authored synthetic fixtures are separate from downloaded cache artifacts. They should remain under repo-local tracked paths such as `specs/nmr_restraints/fixtures/synthetic/` once created.

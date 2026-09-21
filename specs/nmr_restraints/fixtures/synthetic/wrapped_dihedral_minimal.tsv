@@ -1,0 +1,6 @@
+case_id	measured_angle_deg	lower_bound_deg	upper_bound_deg	expected_violation_deg	notes
+wrapped_on_boundary_pos180	180.0	170.0	-170.0	0.0	Boundary value at +180 should be inside wrapped interval
+wrapped_on_boundary_neg180	-180.0	170.0	-170.0	0.0	Boundary value at -180 should be inside wrapped interval
+wrapped_midpoint_outside	0.0	170.0	-170.0	170.0	Midpoint opposite wrapped interval should violate by 170 degrees
+unwrapped_inside	45.0	-60.0	60.0	0.0	Angle inside standard interval has no violation
+unwrapped_outside	120.0	-60.0	60.0	60.0	Angle outside standard interval violates by nearest-boundary distance

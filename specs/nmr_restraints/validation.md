@@ -12,7 +12,7 @@ Implementation is not scientifically complete until fixture expected snapshots a
 
 | Check | Method | Pass Criteria |
 |---|---|---|
-| Top-to-bottom execution | Restart kernel and run all cells on happy-path fixture | No unhandled exceptions; final validation snapshot produced. |
+| Restart-and-run-all execution | Restart kernel and run all cells on happy-path fixture | No unhandled exceptions; final validation snapshot produced. |
 | Local-file execution | Run notebook using cached/local `9L1V` files | Same key outputs as remote fixture, except provenance mode. |
 | Input validation | Test invalid PDB IDs, missing local paths, unsupported extensions | Notebook stops before retrieval/parsing with readable messages. |
 | Retrieval contract | Inspect provenance and cache behavior for remote fixture | URLs, timestamps, cache key, status, and byte lengths are recorded. |
@@ -27,7 +27,7 @@ Implementation is not scientifically complete until fixture expected snapshots a
 | Violation prioritization | Inspect default violation table order | Sorted by descending magnitude, type, then residue number. |
 | Empty restraint behavior | Run missing/empty restraint fixture | Clear missing-restraint message; no geometry attempt; no misleading traceback. |
 | No-violation behavior | Use fixture or threshold configuration yielding no displayed violations | No-violation message includes caveat that this is not a validation verdict. |
-| Visualization state build | Inspect global and local MVS state objects and rendered notebook output | Objects exist and reference expected selections/colors/restraint caps; rendered Mol* views are embedded inline in notebook cells using the `state.molstar_html()` plus base64 `IFrame` pattern. |
+| Visualization state build | Inspect global and local MVS state objects and rendered notebook output | Objects exist and reference expected selections/colors/restraint caps; rendered Mol* views are embedded inline in notebook cells using the `state.molstar_html()` plus base64 `IFrame` pattern. For remote/cache mode, the MVS download node uses the public PDBe model URL rather than a nested full-file `data:` URI. |
 | Visualization fallback | Disable or simulate MolViewSpec/Mol* render failure | Tables and summaries still render; warning is visible. |
 | Hidden-state hazard | Run clean kernel twice and compare key output hashes/counts | Key tables and states are deterministic for same inputs/config. |
 | Dependency/runtime budget | Record dependency versions and elapsed time | Happy-path fixture under 30 seconds after dependencies; exceptions documented with environment. |
@@ -129,6 +129,8 @@ Recommended machine-readable file:
 ```text
 specs/nmr_restraints/fixtures/expected_snapshots.json
 ```
+
+This file should contain expected values only. Raw downloaded fixture bytes remain under repo-local cache paths such as `specs/nmr_restraints/fixtures/cache/`, and that cache stays gitignored.
 
 ## Manual Review Checklist
 

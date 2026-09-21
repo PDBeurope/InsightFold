@@ -5,13 +5,17 @@
 | Notebook / Feature | NMR Restraints Visualization Notebook |
 | Source Spec | `specs/nmr_restraints/requirements.md` |
 | Owner | InsightFold maintainers / fixture curator TBD |
-| Last Updated | 2026-05-08 |
+| Last Updated | 2026-05-11 |
 
 ## Fixture Policy
 
 This notebook has no mutation input and no AlphaFold input path. Mutation and AF fixtures are therefore out of scope for this feature. The representative biological examples are PDB/PDBe NMR entries with deposited NMR-STAR restraints, plus negative and synthetic fixtures for expected failure and edge-case behavior.
 
 Network fixtures may be used during development, but regression validation should use repo-local cached copies under `specs/nmr_restraints/fixtures/cache/`. That cache directory is intentionally ignored by git to avoid committing large coordinate/restraint files. Keep checksums and expected-output snapshots in tracked spec files.
+
+Repo-authored synthetic fixtures belong under repo-local paths such as `specs/nmr_restraints/fixtures/synthetic/` and are expected to be tracked once created. Only downloaded external cache files under `specs/nmr_restraints/fixtures/cache/` are intentionally gitignored.
+
+The fixture set below is preserved for the current contract upgrade. The open work is freezing the missing expected snapshots, not selecting a different v1 fixture strategy.
 
 ## Fixture Summary
 
@@ -67,25 +71,25 @@ Network fixtures may be used during development, but regression validation shoul
 | Distance rows missing lower/upper bound | `0` | exact | Confirms v1 assumption that both bounds are present for this fixture |
 | Torsion rows missing lower/upper bound | `0` | exact | Confirms bounds are present |
 | Wrapped torsion bounds | `0` | exact | Wrapped interval behavior requires synthetic fixture |
-| Mapping coverage | `TBD after implementation parser run` | manual-review | Must be recorded before validation sign-off |
-| Top 5 violations | `TBD after implementation parser run` | manual-review | Must be recorded before validation sign-off |
-| Density summary | `TBD after implementation parser run` | manual-review | Mean density, max-density residue, selected local-view residue |
-| Global MolViewSpec render | Inline embedded IFrame exists | presence | Uses `state.molstar_html()` base64 IFrame pattern |
+| Mapping coverage | `1.0` logical coverage (`1299/1299`) | exact (implementation snapshot) | From `specs/nmr_restraints/fixtures/synthetic/happy_path_snapshot_latest.md` (2026-05-11 build run) |
+| Top 5 violations | Dihedral IDs `144`, `63`, `105`, `59`, `88` with magnitudes `2.750788`, `2.449124`, `1.386890`, `1.259778`, `0.878617` | exact (implementation snapshot) | All are below default dihedral display threshold `5.0` degrees |
+| Density summary | Residues `82`; logical restraints `1299`; structure mean density `15.841463`; max-density residue `A:12:ARG:0` (`81`) | exact (implementation snapshot) | Selected local-view residue snapshot: `A:50:ILE:0`; runtime snapshot: `1.001772` seconds |
+| Global MolViewSpec render | Inline embedded IFrame exists | presence | Uses `state.molstar_html()` base64 IFrame pattern; in remote/cache mode the MVS state points at the public PDBe model URL, not a nested full-file data URI |
 
 #### Validation Checks
 
 - [ ] Remote retrieval succeeds for both model and restraint endpoints.
 - [ ] Local cached files match recorded byte lengths and SHA-256 checksums.
-- [ ] Parser reports 20 submitted models and selects model number 1 by default.
-- [ ] Parser produces 1,330 atoms and 82 residues for model 1.
-- [ ] NMR-STAR parser finds 2 distance loops, 2,219 distance member rows, 1,150 logical distance restraints, and 451 `OR` logical groups.
-- [ ] NMR-STAR parser finds 1 torsion loop and 149 torsion restraints.
-- [ ] Mapping report records logical-restraint coverage and separate member-level diagnostics.
-- [ ] Global density view and local evidence view render inline or produce documented fallback.
+- [x] Parser reports 20 submitted models and selects model number 1 by default.
+- [x] Parser produces 1,330 atoms and 82 residues for model 1.
+- [x] NMR-STAR parser finds 2 distance loops, 2,219 distance member rows, 1,150 logical distance restraints, and 451 `OR` logical groups.
+- [x] NMR-STAR parser finds 1 torsion loop and 149 torsion restraints.
+- [x] Mapping report records logical-restraint coverage and separate member-level diagnostics.
+- [x] Global density view and local evidence view build inline states or documented fallback.
 
 #### Known Risks
 
-- Mapping coverage and violation outputs are not frozen until the implementation parser and geometry code run.
+- Snapshot values are frozen from one implementation run; full execution-validation reproducibility still requires dedicated lifecycle validation.
 - `9L1V` is suitable for `OR` ambiguity and dihedral coverage, but not wrapped-dihedral interval validation.
 
 ### `local-copy-9l1v`
@@ -109,7 +113,7 @@ Network fixtures may be used during development, but regression validation shoul
 | Parsed model/restraint counts | Same as `happy-path-9l1v` | exact | Must match remote fixture for same cached files |
 | Provenance mode | `local-file` | exact | Must display local paths and checksums |
 | Network requirement | none | exact | Validation should pass with network disabled after files are cached |
-| Inline MolViewSpec render | embedded notebook cell view or documented fallback | presence | Local mode must not rely on arbitrary browser access to filesystem paths |
+| Inline MolViewSpec render | embedded notebook cell view or documented fallback | presence | Remote/cache mode uses the public PDBe model URL; local mode must not rely on arbitrary browser access to filesystem paths |
 
 #### Validation Checks
 
@@ -234,7 +238,7 @@ Network fixtures may be used during development, but regression validation shoul
 | Stable Identifier | `wrapped-dihedral-minimal` |
 | Retrieval Endpoint / Command | n/a |
 | Retrieval Date | n/a |
-| Cached Path | `specs/nmr_restraints/fixtures/synthetic/wrapped_dihedral_minimal.*` once created |
+| Cached Path | `specs/nmr_restraints/fixtures/synthetic/wrapped_dihedral_minimal.tsv` |
 | License / Use Constraints | Repo-authored synthetic test data |
 | Data Format / Schema Version | Minimal atom table or mmCIF plus NMR-STAR torsion row |
 | Expected Runtime | Sub-second unit-style check |
@@ -267,7 +271,7 @@ Network fixtures may be used during development, but regression validation shoul
 | Stable Identifier | `partial-mapping-warning`; `partial-mapping-abort` |
 | Retrieval Endpoint / Command | n/a |
 | Retrieval Date | n/a |
-| Cached Path | `specs/nmr_restraints/fixtures/synthetic/partial_mapping_*.str` once created |
+| Cached Path | `specs/nmr_restraints/fixtures/synthetic/partial_mapping_warning.str`; `specs/nmr_restraints/fixtures/synthetic/partial_mapping_abort.str` |
 | License / Use Constraints | Repo-authored synthetic test data |
 | Data Format / Schema Version | NMR-STAR-like restraint rows with controlled invalid atom IDs |
 | Expected Runtime | Sub-second parser/mapping check |
@@ -276,15 +280,15 @@ Network fixtures may be used during development, but regression validation shoul
 
 | Output | Expected Value | Comparison Mode | Tolerance / Notes |
 |---|---|---|---|
-| Warning fixture coverage | `>= 0.70` and `< 0.95` logical coverage | exact/range | Analysis proceeds with partial warning |
-| Abort fixture coverage | `< 0.70` logical coverage | exact/range | Geometry skipped |
+| Warning fixture coverage | `0.8` logical coverage (`8/10`) | exact | Analysis proceeds with partial warning |
+| Abort fixture coverage | `0.3` logical coverage (`3/10`) | exact | Geometry skipped |
 | Unmapped examples | at least one invalid atom identifier shown | presence | Must include logical restraint ID and atom key |
 
 #### Validation Checks
 
-- [ ] Logical-restraint coverage threshold is applied.
-- [ ] Member-level counts are separate from logical coverage.
-- [ ] Warning path and abort path are both exercised.
+- [x] Logical-restraint coverage threshold is applied.
+- [x] Member-level counts are separate from logical coverage.
+- [x] Warning path and abort path are both exercised.
 
 #### Known Risks
 

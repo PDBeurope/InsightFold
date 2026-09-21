@@ -6,7 +6,7 @@ Source requirements: `specs/nmr_restraints/requirements.md`
 
 Path: `notebooks/nmr_restraints_visualization.ipynb`
 
-Runtime target: Python 3.11+ in local Jupyter or JupyterLab. Colab support is desirable but secondary. MolViewSpec/Mol* views must render inline inside notebook cells using the embedded HTML/IFrame pattern already used in `notebooks/homodimer_diagnostic.ipynb`; the notebook must not depend on opening external Mol* links for the primary experience.
+Runtime target: Python 3.11+ in local Jupyter or JupyterLab. Colab support is desirable but secondary. MolViewSpec/Mol* views must render inline inside notebook cells using the embedded HTML/IFrame pattern already used in `notebooks/homodimer_diagnostic.ipynb`; the notebook must not depend on opening external Mol* links for the primary experience. For remote PDB-ID mode, including cache hits, MolViewSpec should receive the browser-fetchable PDBe model URL while Python parsing continues to use the repo-local cached file for reproducibility. Do not embed the full cached mmCIF as a nested `data:` URI in the MolViewSpec state for the default remote example.
 
 Lifecycle status: draft spec. Implementation may begin with the provisional choices below, but fixture expected-value snapshots and NMR domain review are required before scientific sign-off.
 
@@ -101,7 +101,7 @@ input mode + PDB ID or local paths + runtime parameters
 | `dependency_report` | Setup | Validation | DataFrame/dict | Package presence and versions |
 | `input_request` | Input mode | Retrieval | dict | `input_mode`, `pdb_id`, `model_path`, `restraint_path` |
 | `runtime_parameters` | Input mode | Geometry, visualization | dict | `model_index`, thresholds, radius, density mode |
-| `model_source` | Retrieval/local load | Structure parsing, visualization | dict | Raw path/URL, bytes/text path, format, cache status |
+| `model_source` | Retrieval/local load | Structure parsing, visualization | dict | Raw path/URL, browser visualization URL, bytes/text path, format, cache status |
 | `restraint_source` | Retrieval/local load | Restraint parsing | dict | Raw path/URL, text path, cache status |
 | `provenance` | Retrieval/local load | All outputs, export | DataFrame/dict | Source URLs, timestamps, parser versions |
 | `atom_table` | Structure parsing | Mapping, geometry, visualization | DataFrame | One row per atom in selected model |
@@ -141,9 +141,9 @@ input mode + PDB ID or local paths + runtime parameters
 | `compute_dihedral_angle(coords4)` | Compute torsion angle normalized to `[-180, +180]`. |
 | `evaluate_dihedral_restraints(mapped_dihedral_table)` | Compute torsions and circular violation magnitudes. |
 | `compute_residue_density(evaluated_restraints, residue_table)` | Produce absolute and normalized residue density table. |
-| `build_global_mvs_state(model_source, residue_density_table, violation_table, config)` | Create global density and violation visualization state. |
+| `build_global_mvs_state(model_source, residue_density_table, violation_table, config)` | Create global density and violation visualization state. Use a browser-fetchable PDBe URL for remote/cache mode instead of embedding the cached mmCIF as a nested data URI. |
 | `compute_local_context(selection_state, atom_table, residue_table, evaluated_restraints, config)` | Produce local neighborhood and local restraint subset. |
-| `build_local_mvs_state(local_context_table, evaluated_restraints, config)` | Create local evidence visualization state. |
+| `build_local_mvs_state(local_context_table, evaluated_restraints, config)` | Create local evidence visualization state. Use the same browser-fetchable structure source policy as the global view. |
 | `render_mvs_state(state, label)` | Render MolViewSpec/Mol* HTML inline with fallback and error isolation. Use `state.molstar_html()`, base64-encode the HTML, and display it through an `IPython.display.IFrame` data URI as in `notebooks/homodimer_diagnostic.ipynb`. |
 | `export_outputs(tables, states, provenance, config)` | Write CSV/JSON artifacts and return export manifest. |
 
@@ -159,7 +159,7 @@ input mode + PDB ID or local paths + runtime parameters
 | Evaluate `OR` ambiguous distances by smallest measured candidate | Matches PRD and common v1 simplification | Weighted ambiguity, average over members, pseudoatom expansion | Oversimplifies some NMR semantics; warn that unsupported semantics are excluded. |
 | Treat Python state as authoritative | Prevents Mol* frontend state drift and supports reproducibility | Rely on frontend selections | Widget/Mol* state can desynchronize; regenerate views from notebook state. |
 | Use global view for density and thresholded violations only | Reduces visual clutter | Render all restraints globally | Dense restraint networks become unreadable and slow. |
-| Embed MolViewSpec views inline in notebook cells | Matches the direction set by `notebooks/homodimer_diagnostic.ipynb` and keeps the notebook self-contained | External Mol* links only, local filesystem paths in browser | Inline rendering still needs a browser-accessible model payload; implementation must use URL-backed remote files or embedded/served local model content rather than arbitrary local paths. |
+| Embed MolViewSpec views inline in notebook cells | Matches the direction set by `notebooks/homodimer_diagnostic.ipynb` and keeps the notebook self-contained | External Mol* links only, local filesystem paths in browser, full cached mmCIF embedded as nested data URI for default remote mode | Inline rendering still needs a browser-accessible model payload; implementation must use URL-backed remote files for remote/cache mode. Local-file mode may use a documented embedded/served fallback, but arbitrary local paths and oversized nested data URIs are not acceptable for the primary `9L1V` example. |
 
 ## Visualization Plan
 
@@ -178,7 +178,7 @@ input mode + PDB ID or local paths + runtime parameters
 - Parser failures append to `notebook_log` and set explicit empty outputs rather than leaving undefined variables.
 - Mapping abort below 70% sets `analysis_status = "aborted_low_mapping"` and skips geometry/visualization sections that depend on mapped restraints.
 - Visualization functions use isolated `try/except` blocks and show fallback tables when rendering fails.
-- Rendering should follow the homodimer diagnostic helper pattern: call `state.molstar_html()`, base64-encode the result, and display it as an inline `IFrame` so the view appears in the executed notebook cell. Local-file mode must embed or serve the mmCIF content in a notebook-accessible way before building the MVS state; it must not pass an arbitrary local filesystem path to browser-side Mol*.
+- Rendering should follow the homodimer diagnostic helper pattern: call `state.molstar_html()`, base64-encode the result, and display it as an inline `IFrame` so the view appears in the executed notebook cell. Remote PDB-ID mode must pass the public PDBe model URL to MolViewSpec even when Python parsing loaded the same file from cache. Local-file mode must embed or serve the mmCIF content in a notebook-accessible way before building the MVS state; it must not pass an arbitrary local filesystem path to browser-side Mol*.
 - Empty results are valid artifacts when explicitly labeled, especially no compatible restraints and no thresholded violations.
 
 ## Mandatory And Optional Sections
