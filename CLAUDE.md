@@ -103,10 +103,9 @@ kept deliberately:
   `homodimer_diagnostic.ipynb` and `analysis_template.ipynb`. Those three import none of the
   prohibited packages, verified by grep.
 - The **`pyproject.toml` dependency set belongs to the other pipelines** in this repo:
-  `src/insightfold/variants/` and `src/pdbe_interfaces/` import `pandas` and `scipy`, and
-  `notebooks/protein_model_chem.ipynb` is the only file in the repo that imports `Bio`.
-  `networkx` is used by that same notebook; `plotly` is imported by nothing in the repo and is
-  a candidate for removal.
+  `src/insightfold/variants/` imports `pandas`, and `notebooks/protein_model_chem.ipynb`
+  imports `scipy`, `networkx` and `Bio`, being the only file in the repo to import the last
+  two. `plotly` is imported by nothing in the repo and is a candidate for removal.
 - **This is precisely why D9 forbids `pip install`** for the Colab bootstrap: installing the
   package would resolve `pyproject.toml` and drag the whole set in, breaking both the
   dependency rule and the 60 s budget. The bootstrap clones and extends `sys.path` instead, so
