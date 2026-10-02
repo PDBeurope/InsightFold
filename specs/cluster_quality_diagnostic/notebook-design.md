@@ -42,6 +42,7 @@ notebook cell.
 | Plotting | one `plot_*` per figure, each returning a bare `Figure` |
 | Mol\* views | one builder per view, plus `show_mol_view`, `show_model_panel` |
 | **Orchestration** | one `report_*` or `show_*` per cell, listed below |
+| Bootstrap | `prepare_environment()`, the hook `insightfold.notebook_setup.setup()` calls after it imports this module |
 
 **Why the orchestration layer exists.** A notebook cell is a reading surface. Formatting loops,
 try/except ladders and download bookkeeping are implementation, and a reader scrolling for the
@@ -74,10 +75,18 @@ download**, which is why it is an object and not a tuple: the 3D views, the pLDD
 the superposition all need the same file, and it is large, served without a length header and
 unresumable.
 
-**What stays visible in the notebook, deliberately:** the bootstrap cell (it must run before
-the module is importable, and it carries the `TODO(merge)` branch pin), the `ACCESSION` line
-the reader edits, and the display-preferences cell. Those are the interface; everything else is
+**What stays visible in the notebook, deliberately:** the bootstrap cell, the `ACCESSION`
+field and the display-preferences field. Those are the interface; everything else is
 implementation.
+
+**The bootstrap cell is irreducible, not unrefactored.** It is the one cell that cannot call
+this module, because its job is to make the module importable, so the checkout search is written
+out longhand there and nowhere else. Everything that can run after the import moved to
+`insightfold/notebook_setup.py`, shared with `homodimer_diagnostic.ipynb`: selecting the inline
+backend, importing the analysis module, and calling this module's `prepare_environment()` to
+install optional packages, apply the style and print the banner. The cell is a Colab form
+(`display-mode: "form"`), so on Colab it collapses to a title bar and the code is out of sight.
+That absorbed the separate `%matplotlib inline` cell, which is why the notebook lost a cell.
 
 ## Data Flow
 

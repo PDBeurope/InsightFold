@@ -2028,3 +2028,19 @@ def report_summary(models: ModelSelection, family: FamilySummary, position: Posi
     print("\n  Bounding caveats: the percentile is uninformative in the body of the distribution;")
     print("  a chain-average pLDDT partly measures disorder content; and a cluster member may be a")
     print("  distant homologue with a different biological function.")
+
+
+def prepare_environment(repo_root, branch: str = "", colab: bool = False) -> None:
+    """Finish the bootstrap: say where the code came from, install the optional
+    packages, and apply the display style.
+
+    Called by `insightfold.notebook_setup.setup()` straight after it imports this
+    module. Splitting it out is what keeps the notebook's first cell down to the
+    part that genuinely cannot use this module: finding or creating a checkout.
+
+    The order of the three steps is the order the two separate cells printed them
+    in before they were merged, so the notebook's output is unchanged.
+    """
+    print(f"Repository root: {repo_root}")
+    ensure_optional_packages()
+    apply_notebook_style()
