@@ -19,6 +19,13 @@ node_modules/
 !package.json
 !package-lock.json
 
+# Cluster-quality fixtures: the .json.gz responses already ship, but the plain-.json files
+# holding the expected values the offline harness asserts against were caught by the blanket
+# *.json rule above, so a fresh clone got the test inputs without the answers. Scoped to this
+# pack on purpose; other packs generate .json into their own fixture folders and should stay
+# ignored.
+!specs/cluster_quality_diagnostic/fixtures/*.json
+
 # Editor/project-local metadata
 .idea/
 .vscode/

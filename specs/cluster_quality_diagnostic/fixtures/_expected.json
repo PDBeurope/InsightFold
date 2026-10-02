@@ -1,0 +1,292 @@
+{
+  "P69905_mm": {
+    "clusterTotal": 5223,
+    "array_len": 5223,
+    "sorted_desc": true,
+    "mean": 96.3215,
+    "median": 97.12,
+    "sd": 3.467,
+    "p25_p75_width": 0.76,
+    "bands": {
+      "<50": 0.000574,
+      "50-70": 0.003446,
+      "70-90": 0.032548,
+      ">90": 0.963431
+    },
+    "len_median": 146.0,
+    "len_cv": 0.0226,
+    "query_index": 17,
+    "query_percentile": 99.5788,
+    "best": {
+      "acc": "AF-P01956-F1",
+      "plddt": 98.12,
+      "desc": "Hemoglobin subunit alpha"
+    },
+    "worst": {
+      "acc": "AF-A0A4X1SZ27-F1",
+      "plddt": 43.94,
+      "desc": "Globin domain-containing protein"
+    }
+  },
+  "P69905_fs": {
+    "clusterTotal": 53,
+    "array_len": 53,
+    "sorted_desc": true,
+    "mean": 89.4721,
+    "median": 97.0,
+    "sd": 11.8155,
+    "p25_p75_width": 11.12,
+    "bands": {
+      "<50": 0.0,
+      "50-70": 0.113208,
+      "70-90": 0.245283,
+      ">90": 0.641509
+    },
+    "len_median": 142.0,
+    "len_cv": 0.0658,
+    "query_index": null,
+    "query_percentile": null,
+    "best": {
+      "acc": "AF-P0C0U8-F1",
+      "plddt": 98.12,
+      "desc": "Hemoglobin subunit beta-1"
+    },
+    "worst": {
+      "acc": "AF-A0A3Q2WML5-F1",
+      "plddt": 56.84,
+      "desc": "Globin domain-containing protein"
+    }
+  },
+  "Q9I1F6_mm": {
+    "clusterTotal": 4628,
+    "array_len": 4628,
+    "sorted_desc": true,
+    "mean": 91.0368,
+    "median": 91.25,
+    "sd": 2.4982,
+    "p25_p75_width": 2.0,
+    "bands": {
+      "<50": 0.000216,
+      "50-70": 0.000864,
+      "70-90": 0.186906,
+      ">90": 0.812014
+    },
+    "len_median": 340.0,
+    "len_cv": 0.0631,
+    "query_index": 1650,
+    "query_percentile": 63.9585,
+    "best": {
+      "acc": "AF-A0A6J4IYQ6-F1",
+      "plddt": 94.69,
+      "desc": "Transcription regulator"
+    },
+    "worst": {
+      "acc": "AF-A0A415C607-F1",
+      "plddt": 49.81,
+      "desc": "LacI family transcriptional regulator"
+    }
+  },
+  "Q9I1F6_fs": {
+    "clusterTotal": 913,
+    "array_len": 913,
+    "sorted_desc": true,
+    "mean": 86.8859,
+    "median": 88.44,
+    "sd": 6.1435,
+    "p25_p75_width": 6.19,
+    "bands": {
+      "<50": 0.001095,
+      "50-70": 0.023001,
+      "70-90": 0.629792,
+      ">90": 0.346112
+    },
+    "len_median": 275.0,
+    "len_cv": 0.1116,
+    "query_index": null,
+    "query_percentile": null,
+    "best": {
+      "acc": "AF-Q9KM69-F1",
+      "plddt": 95.12,
+      "desc": "Fructose operon regulatory protein"
+    },
+    "worst": {
+      "acc": "AF-A0A9P9Z6A4-F1",
+      "plddt": 43.75,
+      "desc": "HTH lacI-type domain-containing protein"
+    }
+  },
+  "Q13148_mm": {
+    "clusterTotal": 33211,
+    "array_len": 33211,
+    "sorted_desc": true,
+    "mean": 62.4395,
+    "median": 61.88,
+    "sd": 6.3655,
+    "p25_p75_width": 9.22,
+    "bands": {
+      "<50": 0.017615,
+      "50-70": 0.85297,
+      "70-90": 0.129415,
+      ">90": 0.0
+    },
+    "len_median": 423.0,
+    "len_cv": 0.1255,
+    "query_index": 11493,
+    "query_percentile": 65.3007,
+    "best": {
+      "acc": "AF-A0A0L8VJ73-F1",
+      "plddt": 86.81,
+      "desc": "PRP24p Splicing factor that reanneals snRNPs during spliceos"
+    },
+    "worst": {
+      "acc": "AF-A0A438IRX9-F1",
+      "plddt": 30.75,
+      "desc": "DUF4283 domain-containing protein"
+    }
+  },
+  "P0A6F5_mm": {
+    "clusterTotal": 93793,
+    "array_len": 93793,
+    "sorted_desc": true,
+    "mean": 88.4857,
+    "median": 89.31,
+    "sd": 2.5637,
+    "p25_p75_width": 3.31,
+    "bands": {
+      "<50": 0.0,
+      "50-70": 0.000597,
+      "70-90": 0.64459,
+      ">90": 0.354813
+    },
+    "len_median": 544.0,
+    "len_cv": 0.0376,
+    "query_index": 11255,
+    "query_percentile": 87.5694,
+    "best": {
+      "acc": "AF-P51349-F1",
+      "plddt": 93.44,
+      "desc": "Chaperonin GroEL, chloroplastic"
+    },
+    "worst": {
+      "acc": "AF-A0AAE2BTP8-F1",
+      "plddt": 53.69,
+      "desc": "T-complex protein 1 subunit alpha"
+    }
+  },
+  "P0AA25_mm": {
+    "clusterTotal": 62441,
+    "array_len": 62441,
+    "sorted_desc": true,
+    "mean": 91.6856,
+    "median": 92.81,
+    "sd": 4.885,
+    "p25_p75_width": 5.07,
+    "bands": {
+      "<50": 1.6e-05,
+      "50-70": 0.008888,
+      "70-90": 0.25195,
+      ">90": 0.739146
+    },
+    "len_median": 106.0,
+    "len_cv": 0.0678,
+    "query_index": 13792,
+    "query_percentile": 77.2697,
+    "best": {
+      "acc": "AF-N4W7Y0-F1",
+      "plddt": 97.94,
+      "desc": "Thioredoxin"
+    },
+    "worst": {
+      "acc": "AF-A0A7C9P4L9-F1",
+      "plddt": 46.81,
+      "desc": "KaiB domain-containing protein"
+    }
+  },
+  "C1C553_mm": {
+    "clusterTotal": 110,
+    "array_len": 110,
+    "sorted_desc": true,
+    "mean": 51.7245,
+    "median": 51.515,
+    "sd": 1.6678,
+    "p25_p75_width": 2.5825,
+    "bands": {
+      "<50": 0.145455,
+      "50-70": 0.854545,
+      "70-90": 0.0,
+      ">90": 0.0
+    },
+    "len_median": 330.5,
+    "len_cv": 0.0756,
+    "query_index": 8,
+    "query_percentile": 91.8182,
+    "best": {
+      "acc": "AF-A0A3B0JMR9-F1",
+      "plddt": 55.12,
+      "desc": "Myofilin"
+    },
+    "worst": {
+      "acc": "AF-A0A1A9W1J7-F1",
+      "plddt": 48.59,
+      "desc": "Myofilin"
+    }
+  },
+  "P00533_fs": {
+    "clusterTotal": 1,
+    "array_len": 1,
+    "sorted_desc": true,
+    "mean": 76.62,
+    "median": 76.62,
+    "sd": null,
+    "p25_p75_width": 0.0,
+    "bands": {
+      "<50": 0.0,
+      "50-70": 0.0,
+      "70-90": 1.0,
+      ">90": 0.0
+    },
+    "len_median": 1047.0,
+    "len_cv": null,
+    "query_index": null,
+    "query_percentile": null,
+    "best": {
+      "acc": "AF-A0A8J6H303-F1",
+      "plddt": 76.62,
+      "desc": "Receptor protein-tyrosine kinase"
+    },
+    "worst": {
+      "acc": "AF-A0A8J6H303-F1",
+      "plddt": 76.62,
+      "desc": "Receptor protein-tyrosine kinase"
+    }
+  },
+  "P04637-2_mm": {
+    "clusterTotal": 1024,
+    "array_len": 1024,
+    "sorted_desc": true,
+    "mean": 70.4885,
+    "median": 71.0,
+    "sd": 3.7344,
+    "p25_p75_width": 3.56,
+    "bands": {
+      "<50": 0.001953,
+      "50-70": 0.305664,
+      "70-90": 0.692383,
+      ">90": 0.0
+    },
+    "len_median": 391.0,
+    "len_cv": 0.0795,
+    "query_index": null,
+    "query_percentile": null,
+    "best": {
+      "acc": "AF-A0A6J3KC24-F1",
+      "plddt": 79.44,
+      "desc": "Tumor protein 63 isoform X1"
+    },
+    "worst": {
+      "acc": "AF-A0A8B7NPB5-F1",
+      "plddt": 45.25,
+      "desc": "Uncharacterized protein LOC108672414 isoform X1"
+    }
+  }
+}
