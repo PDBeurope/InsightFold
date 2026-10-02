@@ -32,10 +32,15 @@ re-transcribe; never the other way round.
 src/insightfold/
   complex_interface_utils.py   ← THE module. AFDB access, parsing, interface
                                  detection, scoring, thresholds, plots, 3D views.
+  cluster_quality_utils.py     ← AFDB cluster pLDDT diagnostic: cluster API,
+                                 statistics, TM-align superposition, plots, views.
+  notebook_setup.py            ← shared bootstrap. Every notebook's first cell
+                                 ends by calling its `setup()`.
   variants/                    ← variant mapping submodule (unrelated pipeline)
 notebooks/
-  homodimer_diagnostic.ipynb   ← reference implementation; orchestration only
-  analysis_template.ipynb      ← parametrised scaffold for new analysis types
+  homodimer_diagnostic.ipynb      ← reference implementation; orchestration only
+  cluster_quality_diagnostic.ipynb ← cluster pLDDT diagnostic; one call per cell
+  analysis_template.ipynb         ← parametrised scaffold for new analysis types
 specs/homodimer_diagnostic/    ← the spec pack listed above
   references/                  ← GITIGNORED. Publisher PDFs + ipsae_v4.py. Never commit.
 agents/, agent-skills/         ← LLM advisory role definitions
@@ -119,21 +124,36 @@ delete one from `pyproject.toml` without checking `src/insightfold/variants/` an
 
 ### Colab bootstrap (D9)
 
-`git clone --depth 1` plus `sys.path.insert(0, root / 'src')`. **Never `pip install`.** The
-one bootstrap cell works unchanged locally and on Colab: `find_repo_root()` walks up for a
-directory holding both `pyproject.toml` and `src/`; on Colab a missing or stale clone is
-fetched and hard-reset into `/content/InsightFold`. `git reset --hard` is reachable only for
-that disposable scratch directory, never for a checkout the user is working in. The repo is
-public, so there is no token, no auth header and no `getpass` (which would block forever in a
+`git clone --depth 1` plus `sys.path.insert(0, root / 'src')`. **Never `pip install`.** The repo
+is public, so there is no token, no auth header and no `getpass` (which would block forever in a
 Run-all notebook).
 
-> **⚠️ TODO(merge) — ACTION REQUIRED WHEN THIS BRANCH MERGES.**
-> The bootstrap cell of `notebooks/homodimer_diagnostic.ipynb` pins
-> `REPO_BRANCH = 'homodimer-notebook-rework'`, because `complex_interface_utils.py` exists
-> only on that branch. **Once it merges to `main`, flip `REPO_BRANCH` to `'main'` or, better,
-> to a release tag** so a Colab run a year later reproduces rather than picking up drift.
-> Grep for `TODO(merge)` before releasing the notebook. Until this is done, **every Colab run
-> clones a feature branch**, and no Colab result predicts post-merge behaviour.
+**`src/insightfold/notebook_setup.py` owns everything that can run after `src/` is importable.**
+The notebook's first cell keeps only what must run *before* the import, because that cell is the
+one place that cannot use the package: it walks up for a directory holding both `pyproject.toml`
+and `src/`, or on Colab re-clones into `/content/InsightFold`, then calls
+`setup('<module>', REPO_ROOT, REPO_BRANCH)`, which selects the inline backend, imports the
+analysis module and hands it back. Destructive operations are reachable only for that disposable
+scratch directory, never for a checkout somebody is working in, and a path there that is *not* a
+clone is renamed aside rather than deleted.
+
+**The per-module hook.** `setup()` calls the analysis module's
+`prepare_environment(repo_root, branch=..., colab=...)` if it defines one. That is where a module
+installs its own optional packages, applies its own plot style and prints its own banner, so
+`notebook_setup` needs to know nothing about any particular notebook. Both
+`complex_interface_utils` and `cluster_quality_utils` define it.
+
+This existed as three divergent copies before 2026-10-02, at 120, 61 and 27 lines. They had
+already drifted: one carried a placeholder `<org>` in its clone URL, so its Colab path could
+never have worked, and another still pinned a branch that had long since merged.
+
+> **⚠️ TODO(merge) — still outstanding for one notebook.**
+> `notebooks/analysis_template.ipynb` has **not** been migrated and still pins
+> `REPO_BRANCH = 'homodimer-notebook-rework'`. That branch merged in `b1af46c`, so every Colab
+> run of the template clones a stale branch. `homodimer_diagnostic.ipynb` and
+> `cluster_quality_diagnostic.ipynb` both pin `'main'` and are fine. Grep for `TODO(merge)`
+> before releasing anything, and prefer a release tag over `'main'` so a Colab run a year later
+> reproduces rather than picking up drift.
 
 **Colab is currently unverified.** Every validation run had `IN_COLAB = False`, so the clone,
 stale-clone-refresh and `pip install molviewspec` paths have never executed and the 60 s

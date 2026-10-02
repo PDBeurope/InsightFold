@@ -15,8 +15,10 @@ cell may depend on having been run twice, and no cell may depend on a later cell
 cell *does*, which is unchanged; the logic itself lives in the orchestration layer of
 `cluster_quality_utils.py` (see `notebook-design.md`). Two merges followed from this:
 
-- **C002 folded into C003.** The optional-package install is `ensure_optional_packages()`, so the
-  module owns its own optional dependency list rather than restating it in a cell.
+- **C002 and C003 folded into C001.** The optional-package install, the inline backend and the
+  style are all reached through `insightfold.notebook_setup.setup()`, which the bootstrap cell
+  ends by calling. The module owns its own optional dependency list rather than restating it in
+  a cell, and the bootstrap is now a Colab form that collapses to a title bar.
 - **C010 folded into C009.** Both refusal gates now run inside `load_clusters()`, beside the fetch
   they guard, so no cell can read a cluster that has not been gated.
 - **C005, C006 and C007 folded into one Colab form cell.** The accession textbox, the
