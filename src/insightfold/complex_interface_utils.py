@@ -6982,23 +6982,35 @@ Read by `plot_threshold_margins`, by `plot_score_agreement`, and by
 # sliver of image in a field of white. So they size themselves from the block's
 # aspect ratio via `_block_panel_size`, and the score-mask panel additionally
 # picks its grid from it via `_mask_panel_grid`.
+#
+# Two figures deliberately break the 900 px rule by being *wider* than any output
+# area: `PLDDT_FIGSIZE` and `plot_residue_score_profiles`. A figure wider than the
+# column is scaled down to fit it, so these fill the available width on any screen
+# rather than sitting at a fixed size with white space beside them. For those two,
+# the aspect ratio is the real setting and the absolute size only fixes the
+# rendered resolution.
 
 PAE_MATRIX_FIGSIZE: Tuple[float, float] = (6.0, 5.4)
 """Figure size for `plot_pae_matrix`, in inches: 900x810 px at
 `figure.dpi = 150`. The PAE matrix is always square, so this one *can* be fixed.
 Was `(10, 9)` -- 1500x1350 px -- which is what made the notebook scroll it."""
 
-PLDDT_FIGSIZE: Tuple[float, float] = (6.0, 5.4)
-"""Figure size for `plot_plddt_distribution`, in inches: 900x810 px at
+PLDDT_FIGSIZE: Tuple[float, float] = (12.0, 4.8)
+"""Figure size for `plot_plddt_distribution`, in inches: 1800x720 px at
 `figure.dpi = 150`.
 
-Was `(14, 5)` with the two panels side by side -- 2100x750 px, which the output
-area scales down to about 43%, so each panel arrived roughly 450 px wide and the
-per-residue profile had one pixel per two residues. The panels are now stacked,
-so each one gets the *whole* column, and the figure is sized to the same
-900x810 px budget as `PAE_MATRIX_FIGSIZE`: 900 px is the width a notebook column
-renders 1:1, and 810 px is the height above which the output area starts to
-scroll (M5)."""
+This one is sized by **aspect ratio**, not to the 900 px budget the rest of this
+section describes, and deliberately so. At 1800 px it is wider than any notebook
+output area, so the browser scales it down to whatever the column is: it fills
+the width on every screen instead of sitting at a fixed 900 px with white space
+beside it. The height follows the aspect, which is why the ratio rather than the
+absolute size is what matters here.
+
+Was `(14, 5)` with the panels side by side, which gave the per-residue profile
+one pixel per two residues; then `(6, 5.4)` stacked, which fixed the profile but
+left the figure narrower than the window. Stacked **and** wide is what makes the
+profile legible residue by residue: at 12 inches the individual residues and the
+grey interface bands separate, which at 6 inches they do not."""
 
 PLDDT_PANEL_RATIOS: Tuple[float, float] = (1.0, 1.25)
 """Height split between the two stacked pLDDT panels, histogram then profile.
