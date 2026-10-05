@@ -68,23 +68,6 @@ One flat module (D1), named by **domain** rather than by notebook (D8), living i
 | Thresholds | `THRESHOLDS`, `Threshold`, `traffic_light`, `afdb_high_confidence`, `summarise_scores` |
 | Plotting | one `plot_*` per figure, each returning a bare `Figure` |
 | MolViewSpec views | one builder per view, plus `show_mol_view` |
-| Orchestration | `DimerSession`, `load_dimer`, and one `report_*` / `show_*` per notebook cell |
-
-**The orchestration layer, and why the notebook is one call per cell.** The notebook is a
-reading surface: a reader is there for the scores and the figures, not the plumbing. Every cell
-below the bootstrap is a single call, and `DimerSession` carries what those cells used to pass
-between themselves as loose variables. It is one object rather than a dozen names because every
-section needs the same ordered chain pair, the same labels and the same contacts, and a second
-derivation that "usually agrees" is exactly the failure this notebook exists to catch.
-
-**`report_*` prints, `show_*` renders.** That split is load-bearing, not cosmetic: the printed
-numbers are the product and must never sit inside a figure's `try/except`, where a missing
-optional package would take them down with the picture.
-
-Rationale that used to sit in notebook comments now lives in these functions' docstrings. That
-is deliberate: those comments cited `R0xx` and `Dx` identifiers that mean nothing to a reader,
-and they belong where a maintainer will find them. `cluster_quality_utils.py` carries the same
-layer for its own notebook.
 
 **D8 — naming and promotion.** Modules are named by domain so several notebooks can share one.
 A function is promoted out of a domain module into a shared one when its **second** consumer
