@@ -1,4 +1,0 @@
-interface:
-  display_name: "MolViewSpec Rendering"
-  short_description: "Build MolViewSpec and Mol* structural views."
-  default_prompt: "Generate MolViewSpec notebook views for this structure visualization section."

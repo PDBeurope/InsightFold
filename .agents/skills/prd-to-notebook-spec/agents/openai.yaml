@@ -1,4 +1,0 @@
-interface:
-  display_name: "PRD to Notebook Spec"
-  short_description: "Create implementation-ready notebook spec packs."
-  default_prompt: "Use $prd-to-notebook-spec to convert this approved PRD into an implementation-ready InsightFold notebook spec pack."
