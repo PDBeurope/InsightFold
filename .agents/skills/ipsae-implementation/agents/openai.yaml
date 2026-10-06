@@ -1,4 +1,0 @@
-interface:
-  display_name: "IPSAE Implementation"
-  short_description: "Implement ipTM and ipSAE confidence metrics."
-  default_prompt: "Implement or review ipTM and ipSAE calculations for this notebook."

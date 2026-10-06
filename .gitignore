@@ -39,3 +39,9 @@ specs/nmr_restraints/fixtures/cache/
 
 # Reference publications (local only, not redistributed)
 specs/homodimer_diagnostic/references/
+
+# Data the notebooks download at run time. All regenerable from the AFDB and
+# PDBe APIs they call, so it does not belong in the repository.
+notebooks/models/
+notebooks/protvar_downloads/
+notebooks/*.cif

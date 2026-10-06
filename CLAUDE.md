@@ -36,15 +36,28 @@ src/insightfold/
                                  statistics, TM-align superposition, plots, views.
   notebook_setup.py            ← shared bootstrap. Every notebook's first cell
                                  ends by calling its `setup()`.
-  variants/                    ← variant mapping submodule (unrelated pipeline)
+  variants/                    ← variant mapping submodule. ORPHANED by the
+                                 2026-10-06 cleanup: its notebooks were removed
+                                 and nothing imports it now.
+src/pdbe_interfaces/           ← stale 7-module copy of Sri Devan's package.
+                                 `interface_analysis.ipynb` deliberately does NOT
+                                 use it: it clones the complete 10-module version
+                                 at a pinned commit instead. Also orphaned.
 notebooks/
-  homodimer_diagnostic.ipynb      ← reference implementation; orchestration only
+  homodimer_diagnostic.ipynb      ← dimer confidence metrics; one call per cell
   cluster_quality_diagnostic.ipynb ← cluster pLDDT diagnostic; one call per cell
-  analysis_template.ipynb         ← parametrised scaffold for new analysis types
+  interface_analysis.ipynb        ← Sri Devan's; fetches its own package at run time
 specs/homodimer_diagnostic/    ← the spec pack listed above
   references/                  ← GITIGNORED. Publisher PDFs + ipsae_v4.py. Never commit.
-agents/, agent-skills/         ← LLM advisory role definitions
+specs/cluster_quality_diagnostic/ ← its spec pack, fixtures and expected values
 ```
+
+**The 2026-10-06 cleanup.** Six notebooks, four spec packs, the LLM agent and skill
+definitions, the scoping prompts, the local-model evaluations and the downloaded data
+artifacts were removed: 211 files. Everything is preserved in full at
+`PDBeurope/InsightFold-archive` (private, every branch and commit) and in this repo's own
+history, so nothing is lost; the working tree is simply the three notebooks that are
+maintained plus what they need. Rescue from the archive rather than reconstructing.
 
 `src/insightfold/interface.py` was **deleted 2026-09-08** (R095). Everything it did is in
 `complex_interface_utils.py`, which additionally fixes a latent parser bug it had: it treated a
@@ -121,14 +134,18 @@ Colab free tier in < 60 s of wall-clock install time.
 contradiction of the rule above once the scope of each is stated, and both statements are
 kept deliberately:
 
-- The **prohibition is per-consumer**, not repo-wide. It binds `complex_interface_utils.py`,
-  `homodimer_diagnostic.ipynb` and `analysis_template.ipynb`. Those three import none of the
-  prohibited packages, verified by grep.
+- The **prohibition is per-consumer**, not repo-wide. It binds `complex_interface_utils.py`
+  and `homodimer_diagnostic.ipynb`, which import none of the prohibited packages, verified by
+  grep. `cluster_quality_utils.py` is a **separate consumer with its own rules**: it uses
+  `pandas` throughout and imports `Bio` lazily for `PairwiseAligner`.
 - The **`pyproject.toml` dependency set belongs to the other pipelines** in this repo:
-  `src/insightfold/variants/` and `src/pdbe_interfaces/` import `pandas` and `scipy`, and
-  `notebooks/protein_model_chem.ipynb` is the only file in the repo that imports `Bio`.
-  `networkx` is used by that same notebook; `plotly` is imported by nothing in the repo and is
-  a candidate for removal.
+  `src/pdbe_interfaces/` imports `pandas` and `scipy`, and `src/insightfold/variants/` imports
+  `pandas`. Both are orphaned as of the 2026-10-06 cleanup.
+- **Measured after that cleanup:** `gemmi`, `networkx`, `plotly` and `torch` are imported by
+  **nothing** in the repo and are dead entries in `pyproject.toml`. `biopython` is still
+  required, by `cluster_quality_utils.py`, which is a change from when this section was
+  written and the only importer was a notebook that has since been removed. Removing the dead
+  four means regenerating `uv.lock`, so it is a deliberate change rather than a tidy-up.
 - **This is precisely why D9 forbids `pip install`** for the Colab bootstrap: installing the
   package would resolve `pyproject.toml` and drag the whole set in, breaking both the
   dependency rule and the 60 s budget. The bootstrap clones and extends `sys.path` instead, so
@@ -136,8 +153,9 @@ kept deliberately:
 
 If the dimer work is ever split into its own distribution, move these to an optional extra.
 Until then: **do not add a prohibited package to the module or the dimer notebooks, and do not
-delete one from `pyproject.toml` without checking `src/insightfold/variants/` and
-`notebooks/protein_model_chem.ipynb` first.**
+delete one from `pyproject.toml` without grepping `src/` and `notebooks/` first.** The importer
+that justified `biopython` and `networkx` when this section was written has itself been
+removed, which is how a dependency list rots.
 
 ### Colab bootstrap (D9)
 
@@ -164,17 +182,13 @@ This existed as three divergent copies before 2026-10-02, at 120, 61 and 27 line
 already drifted: one carried a placeholder `<org>` in its clone URL, so its Colab path could
 never have worked, and another still pinned a branch that had long since merged.
 
-> **⚠️ TODO(merge) — still outstanding for one notebook.**
-> `notebooks/analysis_template.ipynb` has **not** been migrated and still pins
-> `REPO_BRANCH = 'homodimer-notebook-rework'`. That branch merged in `b1af46c`, so every Colab
-> run of the template clones a stale branch. `homodimer_diagnostic.ipynb` and
-> `cluster_quality_diagnostic.ipynb` both pin `'main'` and are fine. Grep for `TODO(merge)`
-> before releasing anything, and prefer a release tag over `'main'` so a Colab run a year later
-> reproduces rather than picking up drift.
+**No `TODO(merge)` is outstanding.** Both notebooks that use this bootstrap pin `'main'`. The
+template that still pinned a long-merged branch was removed in the 2026-10-06 cleanup. Prefer a
+release tag over `'main'` when one is cut, so a Colab run a year later reproduces rather than
+picking up drift.
 
-**Colab is currently unverified.** Every validation run had `IN_COLAB = False`, so the clone,
-stale-clone-refresh and `pip install molviewspec` paths have never executed and the 60 s
-budget is unmeasured. Any deliverable that runs in two environments must be exercised in both
+**Colab was verified on 2026-10-05** for both notebooks: the clone, the install and the full
+run were exercised from `main`. The 60 s install budget is still unmeasured. Any deliverable that runs in two environments must be exercised in both
 or the untested one must be declared untested.
 
 ---
